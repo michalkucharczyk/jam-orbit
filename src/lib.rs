@@ -4,7 +4,7 @@
 //! - Time series: num_peers over time per validator
 //! - Scatter plot: best block and finalized block per validator
 
-#![cfg(feature = "wasm")]
+#![cfg(target_arch = "wasm32")]
 
 use eframe::egui;
 use std::cell::RefCell;

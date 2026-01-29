@@ -2,7 +2,7 @@
 set -e
 
 echo "Building WASM..."
-wasm-pack build --target web --release --features wasm
+wasm-pack build --target web --release
 
 echo ""
 echo "Done! Serving..."

@@ -4,29 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+# cdylib: for WASM output (.wasm file)
+# rlib: for native CLI binary (links against lib)
 crate-type = ["cdylib", "rlib"]
-
-[features]
-# No default - use --features cli or --features wasm explicitly
-default = []
-wasm = [
-    "eframe",
-    "egui",
-    "egui_plot",
-    "js-sys",
-    "web-sys",
-    "wasm-bindgen",
-    "wasm-bindgen-futures",
-    "console_error_panic_hook",
-    "getrandom/js",
-    "tracing-wasm"
-]
-cli = ["tokio", "tokio-tungstenite", "futures-util", "tracing-subscriber"]
 
 [[bin]]
 name = "jam-cli"
 path = "src/main.rs"
-required-features = ["cli"]
 
 [dependencies]
 # Shared (always included)
@@ -34,15 +18,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 
-# egui ecosystem (WASM only - optional for CLI)
-eframe = { version = "0.31", default-features = false, features = ["glow", "web_screen_reader"], optional = true }
-egui = { version = "0.31", optional = true }
-egui_plot = { version = "0.31", optional = true }
-
-# WASM only
-wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
-web-sys = { version = "0.3", optional = true, features = [
+# WASM target dependencies
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe = { version = "0.31", default-features = false, features = ["glow", "web_screen_reader"] }
+egui = "0.31"
+egui_plot = "0.31"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
     "WebSocket",
     "MessageEvent",
     "ErrorEvent",
@@ -52,16 +35,17 @@ web-sys = { version = "0.3", optional = true, features = [
     "HtmlCanvasElement",
     "Performance"
 ]}
-js-sys = { version = "0.3", optional = true }
-console_error_panic_hook = { version = "0.1", optional = true }
-getrandom = { version = "0.2" }
-tracing-wasm = { version = "0.2", optional = true }
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+tracing-wasm = "0.2"
 
-# CLI only
-tokio = { version = "1", features = ["full"], optional = true }
-tokio-tungstenite = { version = "0.24", optional = true }
-futures-util = { version = "0.3", optional = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+# Native target dependencies
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = "s"
