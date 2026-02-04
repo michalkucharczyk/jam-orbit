@@ -244,8 +244,8 @@ impl JamVisApp {
         };
 
         Plot::new("time_series")
-            .show_axes([true, true])
-            .show_grid(true)
+            .show_axes([false, true])
+            .show_grid(false)
             .allow_zoom(true)
             .allow_drag(true)
             .show_background(false)
@@ -253,7 +253,9 @@ impl JamVisApp {
             .include_x(point_count.max(1) as f64)
             .include_y(y_min as f64)
             .include_y(y_max as f64)
-            .y_axis_label("num_peers")
+            .label_formatter(|_name, value| {
+                format!("t={} peers={:.0}", value.x as u32, value.y)
+            })
             .show(ui, |plot_ui| {
                 for series in &data.time_series.series {
                     if series.len() < 2 {
@@ -282,8 +284,8 @@ impl JamVisApp {
         let max_block = data.blocks.highest_slot().unwrap_or(1) as f64;
 
         Plot::new("best_blocks")
-            .show_axes([true, true])
-            .show_grid(true)
+            .show_axes([false, true])
+            .show_grid(false)
             .allow_zoom(true)
             .allow_drag(true)
             .show_background(false)
@@ -291,8 +293,9 @@ impl JamVisApp {
             .include_x(1024.0)
             .include_y(max_block - 10.0)
             .include_y(max_block + 5.0)
-            .x_axis_label("Validator ID")
-            .y_axis_label("Best Block Slot")
+            .label_formatter(|_name, value| {
+                format!("validator={} slot={:.0}", value.x as u32, value.y)
+            })
             .show(ui, |plot_ui| {
                 let points: PlotPoints = data
                     .blocks
@@ -321,8 +324,8 @@ impl JamVisApp {
         let max_finalized = data.blocks.highest_finalized().unwrap_or(1) as f64;
 
         Plot::new("finalized_blocks")
-            .show_axes([true, true])
-            .show_grid(true)
+            .show_axes([false, true])
+            .show_grid(false)
             .allow_zoom(true)
             .allow_drag(true)
             .show_background(false)
@@ -330,8 +333,9 @@ impl JamVisApp {
             .include_x(1024.0)
             .include_y(max_finalized - 10.0)
             .include_y(max_finalized + 5.0)
-            .x_axis_label("Validator ID")
-            .y_axis_label("Finalized Slot")
+            .label_formatter(|_name, value| {
+                format!("validator={} finalized={:.0}", value.x as u32, value.y)
+            })
             .show(ui, |plot_ui| {
                 let points: PlotPoints = data
                     .blocks
