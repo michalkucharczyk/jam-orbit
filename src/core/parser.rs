@@ -1,8 +1,9 @@
 //! Event parser for jamtart WebSocket messages
 //!
-//! Parses events 10 (Status), 11 (BestBlockChanged), 12 (FinalizedBlockChanged)
+//! Parses all JIP-3 events and stores them in EventStore.
+//! Special handling for Status, BestBlockChanged, FinalizedBlockChanged.
 
-use super::{BestBlockData, TimeSeriesData};
+use super::{BestBlockData, Event, EventStore, TimeSeriesData};
 use serde_json::Value;
 use tracing::{debug, trace, warn};
 
@@ -13,6 +14,8 @@ pub fn parse_event(
     msg: &str,
     time_series: &mut TimeSeriesData,
     blocks: &mut BestBlockData,
+    events: &mut EventStore,
+    now: f64,
 ) -> Option<()> {
     trace!(len = msg.len(), "Parsing message");
 
@@ -29,37 +32,40 @@ pub fn parse_event(
         return None;
     }
 
-    let event_type = json["data"]["event_type"].as_u64()?;
     let node_id = json["data"]["node_id"].as_str()?;
 
-    match event_type {
-        10 => {
-            // Status event - extract num_peers
-            let num_peers = json["data"]["event"]["Status"]["num_peers"].as_u64()?;
+    // Parse the full Event enum from the "event" field
+    let event_json = &json["data"]["event"];
+    let event: Event = serde_json::from_value(event_json.clone())
+        .map_err(|e| {
+            trace!(error = %e, "Failed to parse Event enum");
+        })
+        .ok()?;
+
+    // Store full event for all visualizations
+    events.push(node_id, event.clone(), now);
+
+    // Special handling for specific event types
+    match &event {
+        Event::Status { num_peers, .. } => {
             debug!(node_id, num_peers, "Status event");
-            time_series.push(node_id, num_peers as f32);
-            Some(())
+            time_series.push(node_id, *num_peers as f32);
         }
-        11 => {
-            // BestBlockChanged - extract slot
-            let slot = json["data"]["event"]["BestBlockChanged"]["slot"].as_u64()?;
+        Event::BestBlockChanged { slot, .. } => {
             debug!(node_id, slot, "BestBlockChanged event");
-            blocks.set_best(node_id, slot);
-            Some(())
+            blocks.set_best(node_id, *slot as u64);
         }
-        12 => {
-            // FinalizedBlockChanged - extract slot
-            let slot = json["data"]["event"]["FinalizedBlockChanged"]["slot"].as_u64()?;
+        Event::FinalizedBlockChanged { slot, .. } => {
             debug!(node_id, slot, "FinalizedBlockChanged event");
-            blocks.set_finalized(node_id, slot);
-            Some(())
+            blocks.set_finalized(node_id, *slot as u64);
         }
-        other => {
-            // Unknown event type - ignore (there are ~130 event types, we only care about 3)
-            trace!(event_type = other, "Ignoring event type");
-            None
+        _ => {
+            // Other events stored but not specially handled
+            trace!(event_type = ?event.event_type(), "Event stored");
         }
     }
+
+    Some(())
 }
 
 #[cfg(test)]
@@ -70,6 +76,7 @@ mod tests {
     fn test_parse_status_event() {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
+        let mut events = EventStore::new(100, 60.0);
 
         let msg = r#"{
             "type": "event",
@@ -78,6 +85,12 @@ mod tests {
                     "Status": {
                         "num_peers": 42,
                         "num_val_peers": 2,
+                        "num_sync_peers": 1,
+                        "num_guarantees": [],
+                        "num_shards": 0,
+                        "shards_size": 0,
+                        "num_preimages": 0,
+                        "preimages_size": 0,
                         "timestamp": 12345
                     }
                 },
@@ -86,15 +99,17 @@ mod tests {
             }
         }"#;
 
-        let result = parse_event(msg, &mut ts, &mut blocks);
+        let result = parse_event(msg, &mut ts, &mut blocks, &mut events, 0.0);
         assert!(result.is_some());
         assert_eq!(ts.validator_count(), 1);
+        assert_eq!(events.node_count(), 1);
     }
 
     #[test]
     fn test_parse_best_block_event() {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
+        let mut events = EventStore::new(100, 60.0);
 
         let msg = r#"{
             "type": "event",
@@ -102,7 +117,7 @@ mod tests {
                 "event": {
                     "BestBlockChanged": {
                         "slot": 5662737,
-                        "hash": [1, 2, 3],
+                        "hash": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32],
                         "timestamp": 12345
                     }
                 },
@@ -111,19 +126,21 @@ mod tests {
             }
         }"#;
 
-        let result = parse_event(msg, &mut ts, &mut blocks);
+        let result = parse_event(msg, &mut ts, &mut blocks, &mut events, 0.0);
         assert!(result.is_some());
         assert_eq!(blocks.highest_slot(), Some(5662737));
+        assert_eq!(events.node_count(), 1);
     }
 
     #[test]
     fn test_ignore_non_event() {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
+        let mut events = EventStore::new(100, 60.0);
 
         let msg = r#"{"type": "connected", "data": {"message": "hello"}}"#;
 
-        let result = parse_event(msg, &mut ts, &mut blocks);
+        let result = parse_event(msg, &mut ts, &mut blocks, &mut events, 0.0);
         assert!(result.is_none());
     }
 }

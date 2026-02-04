@@ -45,17 +45,20 @@ pub fn minimal_visuals() -> egui::Visuals {
     visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, TEXT_MUTED);
     visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, BORDER);
 
-    visuals.widgets.inactive.bg_fill = BG_ELEVATED;
+    visuals.widgets.inactive.bg_fill = BG_PRIMARY;
     visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, TEXT_SECONDARY);
     visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, BORDER);
+    visuals.widgets.inactive.weak_bg_fill = BG_PRIMARY;
 
-    visuals.widgets.hovered.bg_fill = BG_HOVER;
+    visuals.widgets.hovered.bg_fill = BG_ELEVATED;
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, TEXT_PRIMARY);
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, TEXT_MUTED);
+    visuals.widgets.hovered.weak_bg_fill = BG_ELEVATED;
 
     visuals.widgets.active.bg_fill = BG_HOVER;
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, TEXT_PRIMARY);
     visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, TEXT_SECONDARY);
+    visuals.widgets.active.weak_bg_fill = BG_HOVER;
 
     // Selection - white on dark
     visuals.selection.bg_fill = Color32::from_rgb(60, 60, 60);

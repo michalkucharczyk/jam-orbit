@@ -11,6 +11,7 @@ use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
 
 /// WebSocket connection state
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum WsState {
     Connecting,
     Connected,
@@ -19,10 +20,12 @@ pub enum WsState {
 }
 
 impl WsState {
+    #[allow(dead_code)]
     pub fn is_connected(&self) -> bool {
         matches!(self, WsState::Connected)
     }
 
+    #[allow(dead_code)]
     pub fn display(&self) -> &'static str {
         match self {
             WsState::Connecting => "Connecting...",
@@ -37,6 +40,7 @@ impl WsState {
 pub struct WsClient {
     #[allow(dead_code)]
     ws: WebSocket,
+    #[allow(dead_code)]
     state: Rc<RefCell<WsState>>,
 }
 
@@ -109,6 +113,7 @@ impl WsClient {
     }
 
     /// Get the current connection state
+    #[allow(dead_code)]
     pub fn state(&self) -> WsState {
         self.state.borrow().clone()
     }

@@ -8,8 +8,9 @@ mod core;
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use core::{parse_event, BestBlockData, TimeSeriesData};
+    use core::{parse_event, BestBlockData, EventStore, TimeSeriesData};
     use futures_util::{SinkExt, StreamExt};
+    use std::time::Instant;
     use tokio_tungstenite::{connect_async, tungstenite::Message};
     use tracing::{error, info, warn};
     use tracing_subscriber::{fmt, EnvFilter};
@@ -28,8 +29,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("WebSocket connected, subscribing...");
     write.send(Message::Text(r#"{"type":"Subscribe","filter":{"type":"All"}}"#.into())).await?;
 
+    let start_time = Instant::now();
     let mut time_series = TimeSeriesData::new(1024, 200);
     let mut blocks = BestBlockData::new(1024);
+    let mut events = EventStore::new(50000, 60.0);
     let mut event_count = 0u64;
     let mut events_last_interval = 0u64;
     let mut stats_interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -41,7 +44,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        if parse_event(&text, &mut time_series, &mut blocks).is_some() {
+                        let now = start_time.elapsed().as_secs_f64();
+                        if parse_event(&text, &mut time_series, &mut blocks, &mut events, now).is_some() {
                             event_count += 1;
                             events_last_interval += 1;
                         }
@@ -57,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = stats_interval.tick() => {
                 info!(
                     validators = time_series.validator_count(),
+                    nodes = events.node_count(),
                     events = event_count,
                     "/sec" = format!("{:.1}", events_last_interval as f64 / 5.0),
                     slot = ?blocks.highest_slot(),
