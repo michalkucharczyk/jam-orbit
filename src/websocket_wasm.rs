@@ -1,40 +1,12 @@
 //! WASM WebSocket client for connecting to jamtart
-//!
-//! This module is only available when the `wasm` feature is enabled.
 
+use crate::ws_state::WsState;
 use std::cell::RefCell;
 use std::rc::Rc;
 use tracing::{debug, error, info, trace, warn};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
-
-/// WebSocket connection state
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub enum WsState {
-    Connecting,
-    Connected,
-    Disconnected,
-    Error(String),
-}
-
-impl WsState {
-    #[allow(dead_code)]
-    pub fn is_connected(&self) -> bool {
-        matches!(self, WsState::Connected)
-    }
-
-    #[allow(dead_code)]
-    pub fn display(&self) -> &'static str {
-        match self {
-            WsState::Connecting => "Connecting...",
-            WsState::Connected => "Connected",
-            WsState::Disconnected => "Disconnected",
-            WsState::Error(_) => "Error",
-        }
-    }
-}
 
 /// WASM WebSocket client
 pub struct WsClient {
