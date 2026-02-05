@@ -165,20 +165,43 @@ impl StoredEvent {
     }
 }
 
-/// Events for a single node
+/// Events for a single node, organized by event type for O(1) filtered access
 pub struct NodeEvents {
-    /// Ring buffer of events for this node
-    pub events: VecDeque<StoredEvent>,
+    /// Events grouped by event_type: event_type → ring buffer
+    pub by_type: HashMap<u8, VecDeque<StoredEvent>>,
     /// Node index (for visualization X coordinate)
     pub index: u16,
+    /// Max events per type (ring buffer capacity)
+    max_per_type: usize,
 }
 
 impl NodeEvents {
-    fn new(index: u16, capacity: usize) -> Self {
+    fn new(index: u16, max_per_type: usize) -> Self {
         Self {
-            events: VecDeque::with_capacity(capacity),
+            by_type: HashMap::new(),
             index,
+            max_per_type,
         }
+    }
+
+    /// Push an event into the appropriate type bucket
+    fn push(&mut self, event: Event, timestamp: f64) {
+        let event_type = event.event_type() as u8;
+        let max = self.max_per_type;
+
+        let bucket = self.by_type.entry(event_type).or_insert_with(|| {
+            VecDeque::with_capacity(max.min(256)) // reasonable initial capacity
+        });
+
+        if bucket.len() >= max {
+            bucket.pop_front();
+        }
+        bucket.push_back(StoredEvent { timestamp, event });
+    }
+
+    /// Total event count across all types
+    pub fn total_events(&self) -> usize {
+        self.by_type.values().map(|v| v.len()).sum()
     }
 }
 
@@ -217,16 +240,11 @@ impl EventStore {
             NodeEvents::new(idx, max_events)
         });
 
-        // Ring buffer: remove oldest if at capacity
-        if node.events.len() >= max_events {
-            node.events.pop_front();
-        }
-
-        node.events.push_back(StoredEvent { timestamp, event });
+        node.push(event, timestamp);
 
         trace!(
             node_id,
-            events_count = node.events.len(),
+            events_count = node.total_events(),
             "Event stored"
         );
     }
@@ -243,10 +261,12 @@ impl EventStore {
         self.nodes.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    /// Iterate events for a specific node
+    /// Iterate events for a specific node and event type
     #[allow(dead_code)]
-    pub fn node_events(&self, node_id: &str) -> Option<&VecDeque<StoredEvent>> {
-        self.nodes.get(node_id).map(|n| &n.events)
+    pub fn node_events(&self, node_id: &str, event_type: u8) -> Option<&VecDeque<StoredEvent>> {
+        self.nodes
+            .get(node_id)
+            .and_then(|n| n.by_type.get(&event_type))
     }
 
     /// Total node count
@@ -265,31 +285,38 @@ impl EventStore {
         num_buckets: usize,
         event_filter: &[bool],
     ) -> Vec<(u16, Vec<u32>)> {
-        let oldest_time = now - (bucket_duration * num_buckets as f64);
+        // Align bucket boundaries to fixed time intervals to prevent oscillation
+        // at bucket edges due to floating-point precision issues.
+        // Floor now to the bucket duration so that bucket boundaries are stable.
+        let aligned_now = (now / bucket_duration).floor() * bucket_duration;
+        let oldest_time = aligned_now - (bucket_duration * num_buckets as f64);
 
         self.nodes
             .values()
             .map(|node| {
                 let mut buckets = vec![0u32; num_buckets];
 
-                for stored in &node.events {
-                    // Skip events outside time window
-                    if stored.timestamp < oldest_time {
-                        continue;
+                // Only iterate over event types that are selected in the filter
+                for (&event_type, events) in &node.by_type {
+                    if (event_type as usize) >= event_filter.len()
+                        || !event_filter[event_type as usize]
+                    {
+                        continue; // Skip entire event type bucket
                     }
 
-                    // Skip events not in filter
-                    let et = stored.event_type() as usize;
-                    if et >= event_filter.len() || !event_filter[et] {
-                        continue;
-                    }
+                    for stored in events {
+                        // Skip events outside time window
+                        if stored.timestamp < oldest_time || stored.timestamp >= aligned_now {
+                            continue;
+                        }
 
-                    // Compute bucket index
-                    let age = now - stored.timestamp;
-                    let bucket_idx = ((age / bucket_duration) as usize).min(num_buckets - 1);
-                    // Invert so newest is at the end
-                    let bucket_idx = num_buckets - 1 - bucket_idx;
-                    buckets[bucket_idx] += 1;
+                        // Compute bucket index using aligned time
+                        let age = aligned_now - stored.timestamp;
+                        let bucket_idx = ((age / bucket_duration) as usize).min(num_buckets - 1);
+                        // Invert so newest is at the end
+                        let bucket_idx = num_buckets - 1 - bucket_idx;
+                        buckets[bucket_idx] += 1;
+                    }
                 }
 
                 (node.index, buckets)
@@ -302,11 +329,13 @@ impl EventStore {
     pub fn prune(&mut self, now: f64) {
         let cutoff = now - self.retention;
         for node in self.nodes.values_mut() {
-            while let Some(front) = node.events.front() {
-                if front.timestamp < cutoff {
-                    node.events.pop_front();
-                } else {
-                    break;
+            for events in node.by_type.values_mut() {
+                while let Some(front) = events.front() {
+                    if front.timestamp < cutoff {
+                        events.pop_front();
+                    } else {
+                        break;
+                    }
                 }
             }
         }

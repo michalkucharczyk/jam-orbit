@@ -444,8 +444,6 @@ impl JamApp {
             .allow_drag(false)
             .allow_scroll(false)
             .show_background(false)
-            .include_x(0.0)
-            .include_x(1024.0)
             .include_y(max_block - 10.0)
             .include_y(max_block + 5.0)
             .label_formatter(|_name, value| {
@@ -490,8 +488,6 @@ impl JamApp {
             .allow_drag(false)
             .allow_scroll(false)
             .show_background(false)
-            .include_x(0.0)
-            .include_x(1024.0)
             .include_y(max_finalized - 10.0)
             .include_y(max_finalized + 5.0)
             .label_formatter(|_name, value| {
@@ -532,19 +528,23 @@ impl JamApp {
                 let mut points: Vec<[f64; 2]> = Vec::new();
 
                 for (_, node) in data.events.nodes() {
-                    for stored in &node.events {
-                        if stored.timestamp < cutoff {
-                            continue;
+                    // Only iterate over selected event types (O(1) per type)
+                    for (&event_type, events) in &node.by_type {
+                        if (event_type as usize) >= self.selected_events.len()
+                            || !self.selected_events[event_type as usize]
+                        {
+                            continue; // Skip entire event type
                         }
 
-                        let et = stored.event_type() as usize;
-                        if et >= self.selected_events.len() || !self.selected_events[et] {
-                            continue;
-                        }
+                        for stored in events {
+                            if stored.timestamp < cutoff {
+                                continue;
+                            }
 
-                        let age = now - stored.timestamp;
-                        if age >= bucket_min_age && age < bucket_max_age {
-                            points.push([node.index as f64, age]);
+                            let age = now - stored.timestamp;
+                            if age >= bucket_min_age && age < bucket_max_age {
+                                points.push([node.index as f64, age]);
+                            }
                         }
                     }
                 }
