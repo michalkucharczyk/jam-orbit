@@ -1382,22 +1382,24 @@ impl Event {
             EventType::SendingGuarantee
             | EventType::ReceivingGuarantee
             | EventType::AssuranceSent
-            | EventType::AssuranceReceived => 2.0,
+            | EventType::AssuranceReceived => 0.25,
 
             // Medium events (shard requests, blocks)
             EventType::SendingShardRequest
             | EventType::ReceivingShardRequest
             | EventType::SendingBlockRequest
-            | EventType::ReceivingBlockRequest => 3.0,
+            | EventType::ReceivingBlockRequest => 0.375,
 
-            // Slow events (connections, work packages)
+            // Slow events (connections)
             EventType::ConnectingOut
             | EventType::ConnectedIn
-            | EventType::WorkPackageSubmission
-            | EventType::WorkPackageBeingShared => 4.0,
+            | EventType::WorkPackageBeingShared => 0.5,
+
+            // WorkPackageSubmission: fast inward shot from outer circle
+            EventType::WorkPackageSubmission => 0.2,
 
             // Default
-            _ => 2.5,
+            _ => 0.3125,
         }
     }
 }

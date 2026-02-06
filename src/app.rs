@@ -24,6 +24,8 @@ use crate::websocket_native::NativeWsClient;
 use std::sync::{Arc, Mutex};
 
 #[cfg(not(target_arch = "wasm32"))]
+use crate::scatter::{ScatterCallback, ScatterParticle, ScatterRenderer, ScatterUniforms};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::vring::{FilterBitfield, GpuParticle, RingCallback, RingRenderer, Uniforms};
 
 /// Default WebSocket URL for jamtart
@@ -73,14 +75,19 @@ pub struct JamApp {
     selected_events: Vec<bool>,
     /// Toggle event selector panel visibility
     show_event_selector: bool,
+    /// Toggle legend overlay visibility
+    show_legend: bool,
     /// Currently active tab
     active_tab: ActiveTab,
-    /// Use CPU rendering for ring (--cpu-ring flag, native only)
+    /// Use CPU rendering for all visualizations (--use-cpu flag, native only)
     #[cfg(not(target_arch = "wasm32"))]
-    use_cpu_ring: bool,
+    use_cpu: bool,
     /// Cursor for incremental GPU particle upload
     #[cfg(not(target_arch = "wasm32"))]
     gpu_upload_cursor: u64,
+    /// Off-screen texture for GPU scatter renderer (None in CPU mode)
+    #[cfg(not(target_arch = "wasm32"))]
+    scatter_texture_id: Option<egui::TextureId>,
 }
 
 impl JamApp {
@@ -134,27 +141,53 @@ impl JamApp {
             fps_counter: FpsCounter::new(),
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
+            show_legend: true,
             active_tab: ActiveTab::default(),
         }
     }
 
     /// Create new app for native platform
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(cc: &eframe::CreationContext<'_>, use_cpu_ring: bool) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, use_cpu: bool) -> Self {
         cc.egui_ctx.set_visuals(minimal_visuals());
 
-        // Register GPU ring renderer unless CPU mode requested
-        if !use_cpu_ring {
+        // Register GPU renderers unless CPU mode requested
+        let scatter_texture_id = if !use_cpu {
             if let Some(render_state) = cc.wgpu_render_state.as_ref() {
-                let renderer =
-                    RingRenderer::new(&render_state.device, render_state.target_format);
+                let device = &render_state.device;
+                let format = render_state.target_format;
+
+                // Ring renderer
+                let ring_renderer = RingRenderer::new(device, format);
                 render_state
                     .renderer
                     .write()
                     .callback_resources
-                    .insert(renderer);
+                    .insert(ring_renderer);
+
+                // Scatter renderer (off-screen texture)
+                let scatter_renderer = ScatterRenderer::new(device, format);
+                let texture_id = {
+                    let mut egui_renderer = render_state.renderer.write();
+                    egui_renderer.register_native_texture(
+                        device,
+                        &scatter_renderer.create_view(),
+                        egui_wgpu::wgpu::FilterMode::Linear,
+                    )
+                };
+                render_state
+                    .renderer
+                    .write()
+                    .callback_resources
+                    .insert(scatter_renderer);
+
+                Some(texture_id)
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
 
         let data = SharedData {
             time_series: TimeSeriesData::new(1024, 200),
@@ -174,9 +207,11 @@ impl JamApp {
             fps_counter: FpsCounter::new(),
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
+            show_legend: true,
             active_tab: ActiveTab::default(),
-            use_cpu_ring,
+            use_cpu,
             gpu_upload_cursor: 0,
+            scatter_texture_id,
         }
     }
 
@@ -231,7 +266,8 @@ impl JamApp {
 }
 
 impl eframe::App for JamApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    #[allow(unused_variables)]
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Request continuous repaint for real-time updates
         ctx.request_repaint();
 
@@ -270,6 +306,25 @@ impl eframe::App for JamApp {
                     ActiveTab::Ring => self.render_ring_tab(ui),
                 }
             });
+
+        // Update scatter texture reference after callback has rendered
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(texture_id) = self.scatter_texture_id {
+            if let Some(wgpu_render_state) = frame.wgpu_render_state() {
+                let mut egui_renderer = wgpu_render_state.renderer.write();
+                if let Some(scatter_renderer) =
+                    egui_renderer.callback_resources.get::<ScatterRenderer>()
+                {
+                    let texture_view = scatter_renderer.create_view();
+                    egui_renderer.update_egui_texture_from_wgpu_texture(
+                        &wgpu_render_state.device,
+                        &texture_view,
+                        egui_wgpu::wgpu::FilterMode::Linear,
+                        texture_id,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -415,6 +470,18 @@ impl JamApp {
                 {
                     self.show_event_selector = !self.show_event_selector;
                 }
+
+                let legend_text = if self.show_legend {
+                    "Legend ●"
+                } else {
+                    "Legend ○"
+                };
+                if ui
+                    .button(egui::RichText::new(legend_text).size(11.0))
+                    .clicked()
+                {
+                    self.show_legend = !self.show_legend;
+                }
             });
         });
     }
@@ -459,12 +526,18 @@ impl JamApp {
                 self.render_finalized_blocks(ui);
             });
         });
+
+        // Draw legend overlay on graphs tab
+        if self.show_legend {
+            let panel_rect = ui.min_rect();
+            self.draw_legend(ui.painter(), panel_rect);
+        }
     }
 
     /// Render the Ring tab — routes to GPU or CPU path (native)
     #[cfg(not(target_arch = "wasm32"))]
     fn render_ring_tab(&mut self, ui: &mut egui::Ui) {
-        if self.use_cpu_ring {
+        if self.use_cpu {
             self.render_ring_tab_cpu(ui);
         } else {
             self.render_ring_tab_gpu(ui);
@@ -510,8 +583,10 @@ impl JamApp {
         let (response, painter) = ui.allocate_painter(available, egui::Sense::hover());
         let rect = response.rect;
 
-        // Ring geometry matching GPU's coordinate system:
-        // GPU RING_RADIUS = 0.75 in NDC, aspect-corrected → pixel_radius = 0.75 * height/2
+        // Ring geometry must match GPU shader (vring/shader.wgsl RING_RADIUS = 0.75).
+        // NDC y-range (-1..1) maps to rect.height(), so 0.75 in NDC = 0.75 * height/2 pixels.
+        // Aspect ratio is handled by the shader (x /= aspect_ratio), and by the painter
+        // naturally since rect.width() absorbs horizontal stretch — both use height for radius.
         let center = rect.center();
         let pixel_radius = 0.75 * rect.height() * 0.5;
         let num_nodes_f = num_nodes as f32;
@@ -553,10 +628,12 @@ impl JamApp {
         ));
 
         // Draw color legend (CPU overlay)
-        self.draw_ring_legend(&painter, rect);
+        if self.show_legend {
+            self.draw_legend(&painter, rect);
+        }
     }
 
-    /// CPU ring rendering path (WASM + native --cpu-ring fallback)
+    /// CPU ring rendering path (WASM + native --use-cpu fallback)
     fn render_ring_tab_cpu(&self, ui: &mut egui::Ui) {
         use std::f32::consts::PI;
 
@@ -625,13 +702,24 @@ impl JamApp {
             let source_angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
             let target_angle = (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
 
-            let source_pos = center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
+            // WorkPackageSubmission: arrives from outer circle at target's angle, straight line, bigger
+            let is_wp_submission = particle.event_type as u8 == 90;
+            let source_pos = if is_wp_submission {
+                // Origin at target's angle but on the outer circle
+                center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius * 1.2
+            } else {
+                center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius
+            };
             let target_pos = center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
 
             let mid = source_pos + (target_pos - source_pos) * 0.5;
             let diff = target_pos - source_pos;
             let perp = egui::vec2(-diff.y, diff.x).normalized();
-            let curve_amount = particle.curve_seed * diff.length() * 0.3;
+            let curve_amount = if is_wp_submission {
+                0.0 // straight line
+            } else {
+                particle.curve_seed * diff.length() * 0.3
+            };
             let control = mid + perp * curve_amount;
 
             let one_minus_t = 1.0 - t;
@@ -655,11 +743,14 @@ impl JamApp {
                 alpha,
             );
 
-            painter.circle_filled(pos, 3.0, final_color);
+            let dot_radius = if is_wp_submission { 7.0 } else { 3.0 };
+            painter.circle_filled(pos, dot_radius, final_color);
         }
 
         // Draw color legend
-        self.draw_ring_legend(&painter, rect);
+        if self.show_legend {
+            self.draw_legend(&painter, rect);
+        }
     }
 
     fn render_ring_stats(&self, ui: &mut egui::Ui, peer_count: usize, particle_count: usize) {
@@ -676,11 +767,30 @@ impl JamApp {
         });
     }
 
-    fn draw_ring_legend(&self, painter: &egui::Painter, rect: egui::Rect) {
-        let legend_x = rect.left() + 10.0;
-        let mut legend_y = rect.bottom() - 14.0 * EVENT_CATEGORIES.len() as f32 - 5.0;
+    fn draw_legend(&self, painter: &egui::Painter, rect: egui::Rect) {
         let swatch_size = 8.0;
+        let row_height = 14.0;
+        let padding = 6.0;
         let font = egui::FontId::monospace(10.0);
+        let num_rows = EVENT_CATEGORIES.len() as f32;
+        let legend_width = 150.0;
+        let legend_height = num_rows * row_height + padding * 2.0;
+
+        // Position: bottom-left with margin
+        let legend_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 8.0, rect.bottom() - legend_height - 8.0),
+            egui::vec2(legend_width, legend_height),
+        );
+
+        // Dark semi-transparent background
+        painter.rect_filled(
+            legend_rect,
+            4.0,
+            egui::Color32::from_rgba_unmultiplied(20, 20, 20, 200),
+        );
+
+        let legend_x = legend_rect.left() + padding;
+        let mut legend_y = legend_rect.top() + padding;
 
         for category in EVENT_CATEGORIES {
             let color = self.get_event_color(category.event_types[0]);
@@ -706,7 +816,7 @@ impl JamApp {
                 text_color,
             );
 
-            legend_y += 14.0;
+            legend_y += row_height;
         }
     }
 
@@ -883,7 +993,101 @@ impl JamApp {
             });
     }
 
+    /// Render Event Particles — routes to GPU or CPU path (native)
+    #[cfg(not(target_arch = "wasm32"))]
     fn render_particle_trails(&self, ui: &mut egui::Ui) {
+        if self.scatter_texture_id.is_some() && !self.use_cpu {
+            self.render_particle_trails_gpu(ui);
+        } else {
+            self.render_particle_trails_cpu(ui);
+        }
+    }
+
+    /// Render Event Particles — always CPU on WASM
+    #[cfg(target_arch = "wasm32")]
+    fn render_particle_trails(&self, ui: &mut egui::Ui) {
+        self.render_particle_trails_cpu(ui);
+    }
+
+    /// GPU scatter rendering path (native only)
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_particle_trails_gpu(&self, ui: &mut egui::Ui) {
+        ui.label(
+            egui::RichText::new("Event Particles")
+                .color(colors::TEXT_MUTED)
+                .size(10.0),
+        );
+
+        let now = now_seconds();
+        let max_age = 10.0;
+        let cutoff = now - max_age;
+
+        // Collect scatter particles from EventStore
+        let (new_particles, node_count) = {
+            let data = &self.data;
+            let mut particles = Vec::new();
+            for (_, node) in data.events.nodes() {
+                for (&event_type, events) in &node.by_type {
+                    if (event_type as usize) >= self.selected_events.len()
+                        || !self.selected_events[event_type as usize]
+                    {
+                        continue;
+                    }
+                    for stored in events {
+                        if stored.timestamp < cutoff {
+                            continue;
+                        }
+                        particles.push(ScatterParticle {
+                            node_index: node.index as f32,
+                            birth_time: stored.timestamp as f32,
+                            event_type: event_type as f32,
+                        });
+                    }
+                }
+            }
+            (particles, data.events.node_count().max(1) as f32)
+        };
+
+        // Allocate canvas area
+        let available = ui.available_size();
+        let (rect, _response) = ui.allocate_exact_size(available, egui::Sense::hover());
+
+        // Display the off-screen texture
+        let texture_id = self.scatter_texture_id.unwrap();
+        ui.painter().image(
+            texture_id,
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+
+        // Submit callback for GPU upload + render
+        let filter = FilterBitfield::from_u64_bitfield(&self.build_filter_bitfield());
+        let aspect_ratio = rect.width() / rect.height();
+        let x_margin = 0.5; // padding so edge nodes aren't clipped
+        let uniforms = ScatterUniforms {
+            x_range: [-x_margin, node_count - 1.0 + x_margin],
+            y_range: [0.0, max_age as f32],
+            point_size: 0.008,
+            current_time: now as f32,
+            max_age: max_age as f32,
+            aspect_ratio,
+        };
+
+        ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            ScatterCallback {
+                new_particles: Arc::new(new_particles),
+                uniforms,
+                filter,
+                rect,
+                reset: true, // Full upload each frame (not incremental for scatter)
+            },
+        ));
+    }
+
+    /// CPU scatter rendering path (WASM + native --use-cpu fallback)
+    fn render_particle_trails_cpu(&self, ui: &mut egui::Ui) {
         use egui_plot::{Plot, PlotPoints, Points};
 
         ui.label(
@@ -896,45 +1100,39 @@ impl JamApp {
         let max_age = 10.0;
         let cutoff = now - max_age;
 
-        // Collect points grouped by age bucket
-        let bucket_points: Vec<(u8, Vec<[f64; 2]>)> = with_data!(self, |data| {
-            let mut buckets: Vec<(u8, Vec<[f64; 2]>)> = Vec::new();
+        // Collect points grouped by event category for colored rendering
+        let category_points: Vec<(egui::Color32, Vec<[f64; 2]>)> = with_data!(self, |data| {
+            let mut result = Vec::new();
 
-            for alpha_bucket in 0..10 {
-                let bucket_min_age = alpha_bucket as f64;
-                let bucket_max_age = (alpha_bucket + 1) as f64;
-                let alpha = (255.0 * (1.0 - alpha_bucket as f64 / 10.0)).max(25.0) as u8;
-
+            for category in EVENT_CATEGORIES {
+                let color = self.get_event_color(category.event_types[0]);
                 let mut points: Vec<[f64; 2]> = Vec::new();
 
-                for (_, node) in data.events.nodes() {
-                    // Only iterate over selected event types (O(1) per type)
-                    for (&event_type, events) in &node.by_type {
-                        if (event_type as usize) >= self.selected_events.len()
-                            || !self.selected_events[event_type as usize]
-                        {
-                            continue; // Skip entire event type
-                        }
+                for &event_type in category.event_types {
+                    if (event_type as usize) >= self.selected_events.len()
+                        || !self.selected_events[event_type as usize]
+                    {
+                        continue;
+                    }
 
-                        for stored in events {
-                            if stored.timestamp < cutoff {
-                                continue;
-                            }
-
-                            let age = now - stored.timestamp;
-                            if age >= bucket_min_age && age < bucket_max_age {
-                                points.push([node.index as f64, age]);
+                    for (_, node) in data.events.nodes() {
+                        if let Some(events) = node.by_type.get(&event_type) {
+                            for stored in events {
+                                if stored.timestamp >= cutoff {
+                                    let age = now - stored.timestamp;
+                                    points.push([node.index as f64, age]);
+                                }
                             }
                         }
                     }
                 }
 
                 if !points.is_empty() {
-                    buckets.push((alpha, points));
+                    result.push((color, points));
                 }
             }
 
-            buckets
+            result
         });
 
         Plot::new("particle_trails")
@@ -950,11 +1148,10 @@ impl JamApp {
                 format!("node={} age={:.1}s", value.x as u32, value.y)
             })
             .show(ui, |plot_ui| {
-                for (alpha, points) in bucket_points {
-                    let color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
+                for (color, points) in &category_points {
                     plot_ui.points(
-                        Points::new(PlotPoints::from(points))
-                            .color(color)
+                        Points::new(PlotPoints::from(points.clone()))
+                            .color(*color)
                             .radius(2.0)
                             .filled(true),
                     );

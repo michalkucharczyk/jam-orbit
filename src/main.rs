@@ -11,6 +11,8 @@ mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod time;
 #[cfg(not(target_arch = "wasm32"))]
+mod scatter;
+#[cfg(not(target_arch = "wasm32"))]
 mod vring;
 #[cfg(not(target_arch = "wasm32"))]
 mod websocket_native;
@@ -25,11 +27,11 @@ fn main() -> eframe::Result<()> {
         .unwrap_or_else(|_| EnvFilter::new("info,jam_vis_poc=debug"));
     fmt().with_env_filter(filter).with_target(true).init();
 
-    let use_cpu_ring = std::env::args().any(|a| a == "--cpu-ring");
+    let use_cpu = std::env::args().any(|a| a == "--use-cpu");
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
+            .with_inner_size([2400.0, 1600.0])
             .with_title("JAM Visualizer"),
         ..Default::default()
     };
@@ -37,7 +39,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "JAM Visualizer",
         options,
-        Box::new(move |cc| Ok(Box::new(app::JamApp::new(cc, use_cpu_ring)))),
+        Box::new(move |cc| Ok(Box::new(app::JamApp::new(cc, use_cpu)))),
     )
 }
 

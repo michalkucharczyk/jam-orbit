@@ -11,6 +11,7 @@ mod app;
 mod core;
 mod theme;
 mod time;
+mod scatter;
 mod vring;
 mod websocket_wasm;
 mod ws_state;
