@@ -1375,29 +1375,29 @@ impl Event {
     }
 
     /// Get the default travel duration for this event type (in seconds).
-    /// Faster events have shorter durations.
+    /// Longer durations make motion visible at high event rates.
     pub fn travel_duration(&self) -> f32 {
         match self.event_type() {
             // Fast events (guarantees, assurances)
             EventType::SendingGuarantee
             | EventType::ReceivingGuarantee
             | EventType::AssuranceSent
-            | EventType::AssuranceReceived => 0.3,
+            | EventType::AssuranceReceived => 2.0,
 
             // Medium events (shard requests, blocks)
             EventType::SendingShardRequest
             | EventType::ReceivingShardRequest
             | EventType::SendingBlockRequest
-            | EventType::ReceivingBlockRequest => 0.5,
+            | EventType::ReceivingBlockRequest => 3.0,
 
             // Slow events (connections, work packages)
             EventType::ConnectingOut
             | EventType::ConnectedIn
             | EventType::WorkPackageSubmission
-            | EventType::WorkPackageBeingShared => 1.0,
+            | EventType::WorkPackageBeingShared => 4.0,
 
             // Default
-            _ => 0.5,
+            _ => 2.5,
         }
     }
 }

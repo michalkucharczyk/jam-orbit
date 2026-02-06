@@ -157,12 +157,21 @@ impl JamApp {
     }
 
     fn default_selected_events() -> Vec<bool> {
-        let mut selected = vec![false; 200];
-        // Enable Status events by default for visibility
-        for &et in &[10, 11, 12, 13] {
-            selected[et] = true;
+        // Enable all events by default
+        vec![true; 200]
+    }
+
+    /// Build a [u64; 4] bitfield from selected_events for DirectedEventBuffer filtering
+    fn build_filter_bitfield(&self) -> [u64; 4] {
+        let mut bitfield = [0u64; 4];
+        for (i, &enabled) in self.selected_events.iter().enumerate() {
+            if enabled {
+                let idx = i / 64;
+                let bit = i % 64;
+                bitfield[idx] |= 1 << bit;
+            }
         }
-        selected
+        bitfield
     }
 
     /// Process incoming WebSocket messages (native only)
@@ -212,6 +221,13 @@ impl eframe::App for JamApp {
         self.data.borrow_mut().events.prune(now);
         #[cfg(not(target_arch = "wasm32"))]
         self.data.events.prune(now);
+
+        // Sync event filter to directed buffer for ring visualization
+        let filter = self.build_filter_bitfield();
+        #[cfg(target_arch = "wasm32")]
+        self.data.borrow_mut().directed_buffer.set_enabled_types(filter);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.data.directed_buffer.set_enabled_types(filter);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(colors::BG_PRIMARY))
@@ -426,7 +442,7 @@ impl JamApp {
         use std::f32::consts::PI;
 
         let now = now_seconds() as f32;
-        let max_age = 3.0_f32; // Show particles for 3 seconds
+        let max_age = 5.0_f32; // Show particles for 5 seconds (matches increased travel durations)
 
         let (peer_count, particle_count, num_nodes, active_particles) =
             with_data!(self, |data| {
@@ -533,6 +549,45 @@ impl JamApp {
             );
 
             painter.circle_filled(pos, 3.0, final_color);
+        }
+
+        // Draw color legend in bottom-left corner
+        let legend_x = rect.left() + 10.0;
+        let mut legend_y = rect.bottom() - 14.0 * EVENT_CATEGORIES.len() as f32 - 5.0;
+        let swatch_size = 8.0;
+        let font = egui::FontId::monospace(10.0);
+
+        for category in EVENT_CATEGORIES {
+            // Use the first event type in the category for color
+            let color = self.get_event_color(category.event_types[0]);
+
+            // Check if any event in this category is enabled
+            let enabled = category
+                .event_types
+                .iter()
+                .any(|&et| (et as usize) < self.selected_events.len() && self.selected_events[et as usize]);
+
+            let alpha = if enabled { 200u8 } else { 40 };
+            let swatch_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
+            let text_color = egui::Color32::from_rgba_unmultiplied(160, 160, 160, alpha);
+
+            // Color swatch
+            painter.circle_filled(
+                egui::pos2(legend_x + swatch_size * 0.5, legend_y + swatch_size * 0.5),
+                swatch_size * 0.5,
+                swatch_color,
+            );
+
+            // Category name
+            painter.text(
+                egui::pos2(legend_x + swatch_size + 6.0, legend_y),
+                egui::Align2::LEFT_TOP,
+                category.name,
+                font.clone(),
+                text_color,
+            );
+
+            legend_y += 14.0;
         }
     }
 
