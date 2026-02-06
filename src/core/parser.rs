@@ -2,8 +2,10 @@
 //!
 //! Parses all JIP-3 events and stores them in EventStore.
 //! Special handling for Status, BestBlockChanged, FinalizedBlockChanged.
+//! Directed events populate the vring visualization buffers.
 
 use super::{BestBlockData, Event, EventStore, TimeSeriesData};
+use crate::vring::{DirectedEventBuffer, DirectedParticleInstance, PeerRegistry};
 use serde_json::Value;
 use tracing::{debug, trace, warn};
 
@@ -15,6 +17,8 @@ pub fn parse_event(
     time_series: &mut TimeSeriesData,
     blocks: &mut BestBlockData,
     events: &mut EventStore,
+    peer_registry: &mut PeerRegistry,
+    directed_buffer: &mut DirectedEventBuffer,
     now: f64,
 ) -> Option<()> {
     trace!(len = msg.len(), "Parsing message");
@@ -44,6 +48,39 @@ pub fn parse_event(
 
     // Store full event for all visualizations
     events.push(node_id, event.clone(), now);
+
+    // Handle directed events for vring visualization
+    if let Some(directed) = event.directed_peer() {
+        if let Some(peer_index) = peer_registry.get_or_insert(directed.peer_id) {
+            // Node index comes from EventStore (assigned on first event from this node)
+            if let Some(node_index) = events.node_index(node_id) {
+                // Determine source/target based on direction
+                let (source, target) = if directed.is_outbound {
+                    (node_index, peer_index)
+                } else {
+                    (peer_index, node_index)
+                };
+
+                // Generate curve_seed from peer_id bytes for deterministic but varied paths
+                let curve_seed = {
+                    let bytes = directed.peer_id;
+                    let combined =
+                        (bytes[0] as i32) ^ (bytes[1] as i32) ^ (bytes[2] as i32) ^ (bytes[3] as i32);
+                    (combined as f32 / 127.5) - 1.0 // Range [-1, 1]
+                };
+
+                let particle = DirectedParticleInstance::new(
+                    source,
+                    target,
+                    now as f32,
+                    event.travel_duration(),
+                    event.event_type() as u8,
+                    curve_seed,
+                );
+                directed_buffer.push(particle);
+            }
+        }
+    }
 
     // Special handling for specific event types
     match &event {
@@ -77,6 +114,8 @@ mod tests {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
         let mut events = EventStore::new(100, 60.0);
+        let mut peer_registry = PeerRegistry::default();
+        let mut directed_buffer = DirectedEventBuffer::default();
 
         let msg = r#"{
             "type": "event",
@@ -99,7 +138,15 @@ mod tests {
             }
         }"#;
 
-        let result = parse_event(msg, &mut ts, &mut blocks, &mut events, 0.0);
+        let result = parse_event(
+            msg,
+            &mut ts,
+            &mut blocks,
+            &mut events,
+            &mut peer_registry,
+            &mut directed_buffer,
+            0.0,
+        );
         assert!(result.is_some());
         assert_eq!(ts.validator_count(), 1);
         assert_eq!(events.node_count(), 1);
@@ -110,6 +157,8 @@ mod tests {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
         let mut events = EventStore::new(100, 60.0);
+        let mut peer_registry = PeerRegistry::default();
+        let mut directed_buffer = DirectedEventBuffer::default();
 
         let msg = r#"{
             "type": "event",
@@ -126,7 +175,15 @@ mod tests {
             }
         }"#;
 
-        let result = parse_event(msg, &mut ts, &mut blocks, &mut events, 0.0);
+        let result = parse_event(
+            msg,
+            &mut ts,
+            &mut blocks,
+            &mut events,
+            &mut peer_registry,
+            &mut directed_buffer,
+            0.0,
+        );
         assert!(result.is_some());
         assert_eq!(blocks.highest_slot(), Some(5662737));
         assert_eq!(events.node_count(), 1);
@@ -137,10 +194,69 @@ mod tests {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
         let mut events = EventStore::new(100, 60.0);
+        let mut peer_registry = PeerRegistry::default();
+        let mut directed_buffer = DirectedEventBuffer::default();
 
         let msg = r#"{"type": "connected", "data": {"message": "hello"}}"#;
 
-        let result = parse_event(msg, &mut ts, &mut blocks, &mut events, 0.0);
+        let result = parse_event(
+            msg,
+            &mut ts,
+            &mut blocks,
+            &mut events,
+            &mut peer_registry,
+            &mut directed_buffer,
+            0.0,
+        );
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_directed_event() {
+        let mut ts = TimeSeriesData::new(10, 100);
+        let mut blocks = BestBlockData::new(10);
+        let mut events = EventStore::new(100, 60.0);
+        let mut peer_registry = PeerRegistry::default();
+        let mut directed_buffer = DirectedEventBuffer::default();
+
+        // SendingGuarantee is a directed event (outbound to recipient peer)
+        let msg = r#"{
+            "type": "event",
+            "data": {
+                "event": {
+                    "SendingGuarantee": {
+                        "timestamp": 12345,
+                        "built_id": 1,
+                        "recipient": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+                    }
+                },
+                "event_type": 106,
+                "node_id": "node_abc"
+            }
+        }"#;
+
+        let result = parse_event(
+            msg,
+            &mut ts,
+            &mut blocks,
+            &mut events,
+            &mut peer_registry,
+            &mut directed_buffer,
+            1.5,
+        );
+        assert!(result.is_some());
+
+        // Verify directed event was captured
+        assert_eq!(peer_registry.len(), 1); // One peer registered
+        assert_eq!(directed_buffer.len(), 1); // One particle created
+
+        // Verify particle properties
+        let particles = directed_buffer.get_active_particles(2.0, 5.0);
+        assert_eq!(particles.len(), 1);
+        let p = &particles[0];
+        assert_eq!(p.source_index, 0.0); // Node index (first node seen)
+        assert_eq!(p.target_index, 0.0); // Peer index (first peer seen)
+        assert_eq!(p.birth_time, 1.5);
+        assert_eq!(p.event_type, 106.0); // SendingGuarantee
     }
 }

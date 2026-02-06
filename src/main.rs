@@ -11,6 +11,8 @@ mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod time;
 #[cfg(not(target_arch = "wasm32"))]
+mod vring;
+#[cfg(not(target_arch = "wasm32"))]
 mod websocket_native;
 #[cfg(not(target_arch = "wasm32"))]
 mod ws_state;

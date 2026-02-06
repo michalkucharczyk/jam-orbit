@@ -12,6 +12,7 @@ use std::rc::Rc;
 use crate::core::{parse_event, BestBlockData, EventStore, TimeSeriesData, EVENT_CATEGORIES};
 use crate::theme::{colors, minimal_visuals};
 use crate::time::now_seconds;
+use crate::vring::{DirectedEventBuffer, PeerRegistry};
 use crate::ws_state::WsState;
 
 #[cfg(target_arch = "wasm32")]
@@ -25,11 +26,21 @@ use std::sync::{Arc, Mutex};
 /// Default WebSocket URL for jamtart
 pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:8080/api/ws";
 
+/// Active tab in the visualization
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveTab {
+    #[default]
+    Graphs,
+    Ring,
+}
+
 /// Shared state that can be updated from WebSocket callbacks
 pub struct SharedData {
     pub time_series: TimeSeriesData,
     pub blocks: BestBlockData,
     pub events: EventStore,
+    pub peer_registry: PeerRegistry,
+    pub directed_buffer: DirectedEventBuffer,
 }
 
 /// JAM Visualization App - runs on both native and WASM
@@ -59,6 +70,8 @@ pub struct JamApp {
     selected_events: Vec<bool>,
     /// Toggle event selector panel visibility
     show_event_selector: bool,
+    /// Currently active tab
+    active_tab: ActiveTab,
 }
 
 impl JamApp {
@@ -71,6 +84,8 @@ impl JamApp {
             time_series: TimeSeriesData::new(1024, 200),
             blocks: BestBlockData::new(1024),
             events: EventStore::new(50000, 60.0),
+            peer_registry: PeerRegistry::default(),
+            directed_buffer: DirectedEventBuffer::default(),
         }));
 
         let ws_state = Rc::new(RefCell::new(WsState::Connecting));
@@ -86,8 +101,18 @@ impl JamApp {
                     ref mut time_series,
                     ref mut blocks,
                     ref mut events,
+                    ref mut peer_registry,
+                    ref mut directed_buffer,
                 } = *data;
-                parse_event(&msg, time_series, blocks, events, now);
+                parse_event(
+                    &msg,
+                    time_series,
+                    blocks,
+                    events,
+                    peer_registry,
+                    directed_buffer,
+                    now,
+                );
             },
             ws_state.clone(),
         )
@@ -100,6 +125,7 @@ impl JamApp {
             fps_counter: FpsCounter::new(),
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
+            active_tab: ActiveTab::default(),
         }
     }
 
@@ -112,6 +138,8 @@ impl JamApp {
             time_series: TimeSeriesData::new(1024, 200),
             blocks: BestBlockData::new(1024),
             events: EventStore::new(50000, 60.0),
+            peer_registry: PeerRegistry::default(),
+            directed_buffer: DirectedEventBuffer::default(),
         };
 
         let ws_client = NativeWsClient::connect(DEFAULT_WS_URL);
@@ -124,6 +152,7 @@ impl JamApp {
             fps_counter: FpsCounter::new(),
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
+            active_tab: ActiveTab::default(),
         }
     }
 
@@ -147,6 +176,8 @@ impl JamApp {
                     &mut self.data.time_series,
                     &mut self.data.blocks,
                     &mut self.data.events,
+                    &mut self.data.peer_registry,
+                    &mut self.data.directed_buffer,
                     now,
                 );
             }
@@ -194,44 +225,10 @@ impl eframe::App for JamApp {
 
                 ui.add_space(8.0);
 
-                let available = ui.available_size();
-                let graph_height = (available.y - 40.0) / 5.0;
-
-                // Time series (num_peers)
-                ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
-                    self.render_time_series(ui);
-                });
-
-                ui.add_space(4.0);
-
-                // Particle trails
-                ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
-                    self.render_particle_trails(ui);
-                });
-
-                ui.add_space(4.0);
-
-                // Event rate lines
-                ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
-                    self.render_event_rates(ui);
-                });
-
-                ui.add_space(4.0);
-
-                // Bottom row: Block scatter plots side by side
-                ui.horizontal(|ui| {
-                    let half_width = (available.x - 10.0) / 2.0;
-
-                    ui.allocate_ui(egui::vec2(half_width, graph_height * 2.0 - 10.0), |ui| {
-                        self.render_best_blocks(ui);
-                    });
-
-                    ui.add_space(10.0);
-
-                    ui.allocate_ui(egui::vec2(half_width, graph_height * 2.0 - 10.0), |ui| {
-                        self.render_finalized_blocks(ui);
-                    });
-                });
+                match self.active_tab {
+                    ActiveTab::Graphs => self.render_graphs_tab(ui),
+                    ActiveTab::Ring => self.render_ring_tab(ui),
+                }
             });
     }
 }
@@ -325,6 +322,39 @@ impl JamApp {
                     .size(11.0),
             );
 
+            ui.add_space(20.0);
+
+            // Tab buttons
+            let graphs_color = if self.active_tab == ActiveTab::Graphs {
+                colors::TEXT_PRIMARY
+            } else {
+                colors::TEXT_MUTED
+            };
+            let ring_color = if self.active_tab == ActiveTab::Ring {
+                colors::TEXT_PRIMARY
+            } else {
+                colors::TEXT_MUTED
+            };
+
+            if ui
+                .selectable_label(
+                    self.active_tab == ActiveTab::Graphs,
+                    egui::RichText::new("Graphs").color(graphs_color).size(11.0),
+                )
+                .clicked()
+            {
+                self.active_tab = ActiveTab::Graphs;
+            }
+            if ui
+                .selectable_label(
+                    self.active_tab == ActiveTab::Ring,
+                    egui::RichText::new("Ring").color(ring_color).size(11.0),
+                )
+                .clicked()
+            {
+                self.active_tab = ActiveTab::Ring;
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new("JAM")
@@ -347,6 +377,182 @@ impl JamApp {
                 }
             });
         });
+    }
+
+    /// Render the Graphs tab content
+    fn render_graphs_tab(&self, ui: &mut egui::Ui) {
+        let available = ui.available_size();
+        let graph_height = (available.y - 40.0) / 5.0;
+
+        // Time series (num_peers)
+        ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
+            self.render_time_series(ui);
+        });
+
+        ui.add_space(4.0);
+
+        // Particle trails
+        ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
+            self.render_particle_trails(ui);
+        });
+
+        ui.add_space(4.0);
+
+        // Event rate lines
+        ui.allocate_ui(egui::vec2(available.x, graph_height), |ui| {
+            self.render_event_rates(ui);
+        });
+
+        ui.add_space(4.0);
+
+        // Bottom row: Block scatter plots side by side
+        ui.horizontal(|ui| {
+            let half_width = (available.x - 10.0) / 2.0;
+
+            ui.allocate_ui(egui::vec2(half_width, graph_height * 2.0 - 10.0), |ui| {
+                self.render_best_blocks(ui);
+            });
+
+            ui.add_space(10.0);
+
+            ui.allocate_ui(egui::vec2(half_width, graph_height * 2.0 - 10.0), |ui| {
+                self.render_finalized_blocks(ui);
+            });
+        });
+    }
+
+    /// Render the Ring tab content (validators ring visualization)
+    fn render_ring_tab(&self, ui: &mut egui::Ui) {
+        use std::f32::consts::PI;
+
+        let now = now_seconds() as f32;
+        let max_age = 3.0_f32; // Show particles for 3 seconds
+
+        let (peer_count, particle_count, num_nodes, active_particles) =
+            with_data!(self, |data| {
+                let particles = data.directed_buffer.get_active_particles(now, max_age);
+                (
+                    data.peer_registry.len(),
+                    data.directed_buffer.len(),
+                    data.events.node_count().max(1), // Use actual node count (min 1 to avoid div by zero)
+                    particles,
+                )
+            });
+
+        // Header with stats
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} peers / {} particles ({} active)",
+                    peer_count,
+                    particle_count,
+                    active_particles.len()
+                ))
+                .color(colors::TEXT_MUTED)
+                .monospace()
+                .size(10.0),
+            );
+        });
+
+        // Reserve the remaining space for the ring visualization
+        let available = ui.available_size();
+        let (response, painter) =
+            ui.allocate_painter(available, egui::Sense::hover());
+        let rect = response.rect;
+
+        // Calculate ring geometry
+        let center = rect.center();
+        let radius = rect.width().min(rect.height()) * 0.4;
+        let num_nodes_f = num_nodes as f32;
+
+        // Draw ring outline (subtle)
+        painter.circle_stroke(
+            center,
+            radius,
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(100, 100, 100, 40)),
+        );
+
+        // Draw node dots on the ring
+        let num_dots = num_nodes.min(256); // Limit for performance
+        for i in 0..num_dots {
+            let angle = (i as f32 / num_nodes_f) * 2.0 * PI - PI * 0.5;
+            let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
+            painter.circle_filled(
+                pos,
+                2.0,
+                egui::Color32::from_rgba_unmultiplied(150, 150, 150, 100),
+            );
+        }
+
+        // Draw active particles
+        for particle in &active_particles {
+            let age = now - particle.birth_time;
+            let t = (age / particle.travel_duration).clamp(0.0, 1.0);
+
+            // Source and target positions on ring
+            let source_angle =
+                (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+            let target_angle =
+                (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+
+            let source_pos =
+                center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
+            let target_pos =
+                center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
+
+            // Compute bezier control point
+            let mid = source_pos + (target_pos - source_pos) * 0.5;
+            let diff = target_pos - source_pos;
+            let perp = egui::vec2(-diff.y, diff.x).normalized();
+            let curve_amount = particle.curve_seed * diff.length() * 0.3;
+            let control = mid + perp * curve_amount;
+
+            // Quadratic bezier position
+            let one_minus_t = 1.0 - t;
+            let pos = egui::Pos2::new(
+                source_pos.x * (one_minus_t * one_minus_t)
+                    + control.x * (2.0 * one_minus_t * t)
+                    + target_pos.x * (t * t),
+                source_pos.y * (one_minus_t * one_minus_t)
+                    + control.y * (2.0 * one_minus_t * t)
+                    + target_pos.y * (t * t),
+            );
+
+            // Color based on event type
+            let color = self.get_event_color(particle.event_type as u8);
+
+            // Alpha fade
+            let fade_in = (t / 0.1).min(1.0);
+            let fade_out = 1.0 - ((t - 0.9) / 0.1).max(0.0);
+            let alpha = (color.a() as f32 * fade_in * fade_out) as u8;
+            let final_color = egui::Color32::from_rgba_unmultiplied(
+                color.r(),
+                color.g(),
+                color.b(),
+                alpha,
+            );
+
+            painter.circle_filled(pos, 3.0, final_color);
+        }
+    }
+
+    /// Get color for event type
+    fn get_event_color(&self, event_type: u8) -> egui::Color32 {
+        match event_type {
+            0 => egui::Color32::from_rgb(128, 128, 128),       // Meta - gray
+            10..=13 => egui::Color32::from_rgb(100, 200, 100), // Status - green
+            20..=28 => egui::Color32::from_rgb(100, 150, 255), // Connection - blue
+            40..=47 => egui::Color32::from_rgb(255, 200, 100), // Block auth - orange
+            60..=68 => egui::Color32::from_rgb(200, 100, 255), // Block dist - purple
+            80..=84 => egui::Color32::from_rgb(255, 100, 100), // Tickets - red
+            90..=104 => egui::Color32::from_rgb(100, 255, 200), // Work Package - cyan
+            105..=113 => egui::Color32::from_rgb(50, 200, 180), // Guaranteeing - teal
+            120..=131 => egui::Color32::from_rgb(255, 255, 100), // Availability - yellow
+            140..=153 => egui::Color32::from_rgb(255, 150, 150), // Bundle - pink
+            160..=178 => egui::Color32::from_rgb(150, 200, 255), // Segment - light blue
+            190..=199 => egui::Color32::from_rgb(200, 200, 200), // Preimage - light gray
+            _ => egui::Color32::from_rgb(255, 255, 255),
+        }
     }
 
     fn render_time_series(&self, ui: &mut egui::Ui) {

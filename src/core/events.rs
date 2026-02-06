@@ -1217,3 +1217,187 @@ pub fn event_color_rgb(event_type: u8) -> (u8, u8, u8) {
         _ => (255, 255, 255),
     }
 }
+
+// ============================================================================
+// DirectedEvent trait - Extract peer direction from events
+// ============================================================================
+
+/// Information about a directed event (node-to-node communication)
+#[derive(Debug, Clone, Copy)]
+pub struct DirectedPeer<'a> {
+    /// The peer ID involved in this event
+    pub peer_id: &'a PeerId,
+    /// True if this node is sending (outbound), false if receiving (inbound)
+    pub is_outbound: bool,
+}
+
+impl Event {
+    /// Extract directed peer information from events that have node-to-node direction.
+    /// Returns (peer_id, is_outbound) where is_outbound means this node is the sender.
+    /// Returns None for non-directed events.
+    pub fn directed_peer(&self) -> Option<DirectedPeer<'_>> {
+        match self {
+            // === Networking (outbound) ===
+            Event::ConnectingOut { to, .. } => Some(DirectedPeer {
+                peer_id: &to.peer_id,
+                is_outbound: true,
+            }),
+
+            // === Networking (inbound) ===
+            Event::ConnectedIn { peer_id, .. } => Some(DirectedPeer {
+                peer_id,
+                is_outbound: false,
+            }),
+
+            // === Networking (bidirectional - treat as about the peer) ===
+            Event::Disconnected { peer, .. } => Some(DirectedPeer {
+                peer_id: peer,
+                is_outbound: true, // Arbitrary, could be either
+            }),
+            Event::PeerMisbehaved { peer, .. } => Some(DirectedPeer {
+                peer_id: peer,
+                is_outbound: true, // About the peer
+            }),
+
+            // === Block distribution (outbound) ===
+            Event::SendingBlockRequest { recipient, .. } => Some(DirectedPeer {
+                peer_id: recipient,
+                is_outbound: true,
+            }),
+
+            // === Block distribution (inbound) ===
+            Event::ReceivingBlockRequest { sender, .. } => Some(DirectedPeer {
+                peer_id: sender,
+                is_outbound: false,
+            }),
+
+            // === Block distribution (ConnectionSide-based) ===
+            Event::BlockAnnouncementStreamOpened { peer, opener, .. } => Some(DirectedPeer {
+                peer_id: peer,
+                is_outbound: matches!(opener, ConnectionSide::Local),
+            }),
+            Event::BlockAnnouncementStreamClosed { peer, closer, .. } => Some(DirectedPeer {
+                peer_id: peer,
+                is_outbound: matches!(closer, ConnectionSide::Local),
+            }),
+            Event::BlockAnnounced { peer, announcer, .. } => Some(DirectedPeer {
+                peer_id: peer,
+                is_outbound: matches!(announcer, ConnectionSide::Local),
+            }),
+
+            // === Tickets (ConnectionSide-based) ===
+            Event::TicketTransferFailed { peer, sender, .. } => Some(DirectedPeer {
+                peer_id: peer,
+                is_outbound: matches!(sender, ConnectionSide::Local),
+            }),
+            Event::TicketTransferred { peer, sender, .. } => Some(DirectedPeer {
+                peer_id: peer,
+                is_outbound: matches!(sender, ConnectionSide::Local),
+            }),
+
+            // === Work Package (inbound from builder/primary) ===
+            Event::WorkPackageSubmission { builder, .. } => Some(DirectedPeer {
+                peer_id: builder,
+                is_outbound: false,
+            }),
+            Event::WorkPackageBeingShared { primary, .. } => Some(DirectedPeer {
+                peer_id: primary,
+                is_outbound: false,
+            }),
+
+            // === Work Package sharing (outbound to secondary) ===
+            Event::SharingWorkPackage { secondary, .. } => Some(DirectedPeer {
+                peer_id: secondary,
+                is_outbound: true,
+            }),
+            Event::WorkPackageSharingFailed { secondary, .. } => Some(DirectedPeer {
+                peer_id: secondary,
+                is_outbound: true,
+            }),
+            Event::BundleSent { secondary, .. } => Some(DirectedPeer {
+                peer_id: secondary,
+                is_outbound: true,
+            }),
+
+            // === Work Report signature (inbound from secondary) ===
+            Event::WorkReportSignatureReceived { secondary, .. } => Some(DirectedPeer {
+                peer_id: secondary,
+                is_outbound: false,
+            }),
+
+            // === Guarantee distribution (outbound) ===
+            Event::SendingGuarantee { recipient, .. } => Some(DirectedPeer {
+                peer_id: recipient,
+                is_outbound: true,
+            }),
+
+            // === Guarantee distribution (inbound) ===
+            Event::ReceivingGuarantee { sender, .. } => Some(DirectedPeer {
+                peer_id: sender,
+                is_outbound: false,
+            }),
+
+            // === Shard requests (outbound to guarantor) ===
+            Event::SendingShardRequest { guarantor, .. } => Some(DirectedPeer {
+                peer_id: guarantor,
+                is_outbound: true,
+            }),
+
+            // === Shard requests (inbound from assurer) ===
+            Event::ReceivingShardRequest { assurer, .. } => Some(DirectedPeer {
+                peer_id: assurer,
+                is_outbound: false,
+            }),
+
+            // === Assurance (outbound) ===
+            Event::AssuranceSendFailed { recipient, .. } => Some(DirectedPeer {
+                peer_id: recipient,
+                is_outbound: true,
+            }),
+            Event::AssuranceSent { recipient, .. } => Some(DirectedPeer {
+                peer_id: recipient,
+                is_outbound: true,
+            }),
+
+            // === Assurance (inbound) ===
+            Event::AssuranceReceiveFailed { sender, .. } => Some(DirectedPeer {
+                peer_id: sender,
+                is_outbound: false,
+            }),
+            Event::AssuranceReceived { sender, .. } => Some(DirectedPeer {
+                peer_id: sender,
+                is_outbound: false,
+            }),
+
+            // All other events are not directed (no peer ID or need EventId lookup)
+            _ => None,
+        }
+    }
+
+    /// Get the default travel duration for this event type (in seconds).
+    /// Faster events have shorter durations.
+    pub fn travel_duration(&self) -> f32 {
+        match self.event_type() {
+            // Fast events (guarantees, assurances)
+            EventType::SendingGuarantee
+            | EventType::ReceivingGuarantee
+            | EventType::AssuranceSent
+            | EventType::AssuranceReceived => 0.3,
+
+            // Medium events (shard requests, blocks)
+            EventType::SendingShardRequest
+            | EventType::ReceivingShardRequest
+            | EventType::SendingBlockRequest
+            | EventType::ReceivingBlockRequest => 0.5,
+
+            // Slow events (connections, work packages)
+            EventType::ConnectingOut
+            | EventType::ConnectedIn
+            | EventType::WorkPackageSubmission
+            | EventType::WorkPackageBeingShared => 1.0,
+
+            // Default
+            _ => 0.5,
+        }
+    }
+}
