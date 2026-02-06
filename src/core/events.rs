@@ -1126,11 +1126,12 @@ pub const EVENT_CATEGORIES: &[EventCategory] = &[
         event_types: &[80, 81, 82, 83, 84],
     },
     EventCategory {
+        name: "Work Package",
+        event_types: &[90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104],
+    },
+    EventCategory {
         name: "Guaranteeing",
-        event_types: &[
-            90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108,
-            109, 110, 111, 112, 113,
-        ],
+        event_types: &[105, 106, 107, 108, 109, 110, 111, 112, 113],
     },
     EventCategory {
         name: "Availability",
@@ -1207,7 +1208,8 @@ pub fn event_color_rgb(event_type: u8) -> (u8, u8, u8) {
         40..=47 => (255, 200, 100), // Block auth - orange
         60..=68 => (200, 100, 255), // Block dist - purple
         80..=84 => (255, 100, 100), // Tickets - red
-        90..=113 => (100, 255, 200), // Guaranteeing - cyan
+        90..=104 => (100, 255, 200), // Work Package - cyan
+        105..=113 => (50, 200, 180), // Guaranteeing - teal
         120..=131 => (255, 255, 100), // Availability - yellow
         140..=153 => (255, 150, 150), // Bundle - pink
         160..=178 => (150, 200, 255), // Segment - light blue
