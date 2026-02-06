@@ -1296,10 +1296,7 @@ impl Event {
             }),
 
             // === Work Package (inbound from builder/primary) ===
-            Event::WorkPackageSubmission { builder, .. } => Some(DirectedPeer {
-                peer_id: builder,
-                is_outbound: false,
-            }),
+            // WorkPackageSubmission is visualized as a collapsing pulse, not a directed particle.
             Event::WorkPackageBeingShared { primary, .. } => Some(DirectedPeer {
                 peer_id: primary,
                 is_outbound: false,
@@ -1382,24 +1379,21 @@ impl Event {
             EventType::SendingGuarantee
             | EventType::ReceivingGuarantee
             | EventType::AssuranceSent
-            | EventType::AssuranceReceived => 0.25,
+            | EventType::AssuranceReceived => 2.0,
 
             // Medium events (shard requests, blocks)
             EventType::SendingShardRequest
             | EventType::ReceivingShardRequest
             | EventType::SendingBlockRequest
-            | EventType::ReceivingBlockRequest => 0.375,
+            | EventType::ReceivingBlockRequest => 2.0,
 
-            // Slow events (connections)
+            // Slow events (connections, work package sharing)
             EventType::ConnectingOut
             | EventType::ConnectedIn
-            | EventType::WorkPackageBeingShared => 0.5,
+            | EventType::WorkPackageBeingShared => 3.0,
 
-            // WorkPackageSubmission: fast inward shot from outer circle
-            EventType::WorkPackageSubmission => 0.2,
-
-            // Default
-            _ => 0.3125,
+            // Default (includes WorkPackageSubmission — pulse handles visual emphasis)
+            _ => 2.0,
         }
     }
 }

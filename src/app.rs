@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::core::{parse_event, BestBlockData, EventStore, TimeSeriesData, EVENT_CATEGORIES};
 use crate::theme::{colors, minimal_visuals};
 use crate::time::now_seconds;
-use crate::vring::{DirectedEventBuffer, PeerRegistry};
+use crate::vring::{DirectedEventBuffer, PulseEvent};
 use crate::ws_state::WsState;
 
 #[cfg(target_arch = "wasm32")]
@@ -39,13 +39,20 @@ pub enum ActiveTab {
     Ring,
 }
 
+/// An active collapsing-pulse animation on the ring.
+struct CollapsingPulse {
+    node_index: u16,
+    event_type: u8,
+    birth_time: f32,
+}
+
 /// Shared state that can be updated from WebSocket callbacks
 pub struct SharedData {
     pub time_series: TimeSeriesData,
     pub blocks: BestBlockData,
     pub events: EventStore,
-    pub peer_registry: PeerRegistry,
     pub directed_buffer: DirectedEventBuffer,
+    pub pulse_events: Vec<PulseEvent>,
 }
 
 /// JAM Visualization App - runs on both native and WASM
@@ -88,6 +95,8 @@ pub struct JamApp {
     /// Off-screen texture for GPU scatter renderer (None in CPU mode)
     #[cfg(not(target_arch = "wasm32"))]
     scatter_texture_id: Option<egui::TextureId>,
+    /// Active collapsing-pulse animations on the ring
+    active_pulses: Vec<CollapsingPulse>,
 }
 
 impl JamApp {
@@ -100,8 +109,8 @@ impl JamApp {
             time_series: TimeSeriesData::new(1024, 200),
             blocks: BestBlockData::new(1024),
             events: EventStore::new(50000, 60.0),
-            peer_registry: PeerRegistry::default(),
             directed_buffer: DirectedEventBuffer::default(),
+            pulse_events: Vec::new(),
         }));
 
         let ws_state = Rc::new(RefCell::new(WsState::Connecting));
@@ -117,16 +126,16 @@ impl JamApp {
                     ref mut time_series,
                     ref mut blocks,
                     ref mut events,
-                    ref mut peer_registry,
                     ref mut directed_buffer,
+                    ref mut pulse_events,
                 } = *data;
                 parse_event(
                     &msg,
                     time_series,
                     blocks,
                     events,
-                    peer_registry,
                     directed_buffer,
+                    pulse_events,
                     now,
                 );
             },
@@ -143,6 +152,7 @@ impl JamApp {
             show_event_selector: false,
             show_legend: true,
             active_tab: ActiveTab::default(),
+            active_pulses: Vec::new(),
         }
     }
 
@@ -193,8 +203,8 @@ impl JamApp {
             time_series: TimeSeriesData::new(1024, 200),
             blocks: BestBlockData::new(1024),
             events: EventStore::new(50000, 60.0),
-            peer_registry: PeerRegistry::default(),
             directed_buffer: DirectedEventBuffer::default(),
+            pulse_events: Vec::new(),
         };
 
         let ws_client = NativeWsClient::connect(DEFAULT_WS_URL);
@@ -212,6 +222,7 @@ impl JamApp {
             use_cpu,
             gpu_upload_cursor: 0,
             scatter_texture_id,
+            active_pulses: Vec::new(),
         }
     }
 
@@ -244,8 +255,8 @@ impl JamApp {
                     &mut self.data.time_series,
                     &mut self.data.blocks,
                     &mut self.data.events,
-                    &mut self.data.peer_registry,
                     &mut self.data.directed_buffer,
+                    &mut self.data.pulse_events,
                     now,
                 );
             }
@@ -288,6 +299,25 @@ impl eframe::App for JamApp {
         self.data.borrow_mut().directed_buffer.set_enabled_types(filter);
         #[cfg(not(target_arch = "wasm32"))]
         self.data.directed_buffer.set_enabled_types(filter);
+
+        // Drain pending pulse events into active pulses
+        {
+            #[cfg(target_arch = "wasm32")]
+            let pulses: Vec<PulseEvent> = self.data.borrow_mut().pulse_events.drain(..).collect();
+            #[cfg(not(target_arch = "wasm32"))]
+            let pulses: Vec<PulseEvent> = self.data.pulse_events.drain(..).collect();
+            for pe in pulses {
+                self.active_pulses.push(CollapsingPulse {
+                    node_index: pe.node_index,
+                    event_type: pe.event_type,
+                    birth_time: pe.birth_time,
+                });
+            }
+        }
+        // Expire old pulses
+        const PULSE_DURATION: f32 = 0.4;
+        let now_f32 = now as f32;
+        self.active_pulses.retain(|p| now_f32 - p.birth_time < PULSE_DURATION);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(colors::BG_PRIMARY))
@@ -558,7 +588,7 @@ impl JamApp {
 
         let now = now_seconds() as f32;
 
-        let (peer_count, particle_count, num_nodes, new_particles, new_cursor) = {
+        let (particle_count, num_nodes, new_particles, new_cursor) = {
             let data = &self.data;
             let (particles, cursor, skip) =
                 data.directed_buffer.get_new_since(self.gpu_upload_cursor);
@@ -566,7 +596,6 @@ impl JamApp {
                 particles.iter().skip(skip).map(GpuParticle::from).collect();
             let new_cursor = cursor;
             (
-                data.peer_registry.len(),
                 data.directed_buffer.len(),
                 data.events.node_count().max(1),
                 gpu_particles,
@@ -576,7 +605,7 @@ impl JamApp {
         self.gpu_upload_cursor = new_cursor;
 
         // Stats header
-        self.render_ring_stats(ui, peer_count, particle_count);
+        self.render_ring_stats(ui, num_nodes, particle_count);
 
         // Allocate canvas
         let available = ui.available_size();
@@ -607,6 +636,9 @@ impl JamApp {
                 egui::Color32::from_rgba_unmultiplied(150, 150, 150, 100),
             );
         }
+
+        // Draw collapsing pulse overlays
+        self.draw_pulses(&painter, center, pixel_radius, num_nodes_f, now);
 
         // GPU paint callback for particles
         let filter = FilterBitfield::from_u64_bitfield(&self.build_filter_bitfield());
@@ -640,11 +672,10 @@ impl JamApp {
         let now = now_seconds() as f32;
         let max_age = 5.0_f32;
 
-        let (peer_count, particle_count, num_nodes, active_particles) =
+        let (particle_count, num_nodes, active_particles) =
             with_data!(self, |data| {
                 let particles = data.directed_buffer.get_active_particles(now, max_age);
                 (
-                    data.peer_registry.len(),
                     data.directed_buffer.len(),
                     data.events.node_count().max(1),
                     particles,
@@ -655,8 +686,8 @@ impl JamApp {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(
-                    "{} peers / {} particles ({} active)",
-                    peer_count,
+                    "{} nodes / {} particles ({} active)",
+                    num_nodes,
                     particle_count,
                     active_particles.len()
                 ))
@@ -702,24 +733,13 @@ impl JamApp {
             let source_angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
             let target_angle = (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
 
-            // WorkPackageSubmission: arrives from outer circle at target's angle, straight line, bigger
-            let is_wp_submission = particle.event_type as u8 == 90;
-            let source_pos = if is_wp_submission {
-                // Origin at target's angle but on the outer circle
-                center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius * 1.2
-            } else {
-                center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius
-            };
+            let source_pos = center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
             let target_pos = center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
 
             let mid = source_pos + (target_pos - source_pos) * 0.5;
             let diff = target_pos - source_pos;
             let perp = egui::vec2(-diff.y, diff.x).normalized();
-            let curve_amount = if is_wp_submission {
-                0.0 // straight line
-            } else {
-                particle.curve_seed * diff.length() * 0.3
-            };
+            let curve_amount = particle.curve_seed * diff.length() * 0.3;
             let control = mid + perp * curve_amount;
 
             let one_minus_t = 1.0 - t;
@@ -743,9 +763,11 @@ impl JamApp {
                 alpha,
             );
 
-            let dot_radius = if is_wp_submission { 7.0 } else { 3.0 };
-            painter.circle_filled(pos, dot_radius, final_color);
+            painter.circle_filled(pos, 3.0, final_color);
         }
+
+        // Draw collapsing pulse overlays
+        self.draw_pulses(&painter, center, radius, num_nodes_f, now);
 
         // Draw color legend
         if self.show_legend {
@@ -753,12 +775,12 @@ impl JamApp {
         }
     }
 
-    fn render_ring_stats(&self, ui: &mut egui::Ui, peer_count: usize, particle_count: usize) {
+    fn render_ring_stats(&self, ui: &mut egui::Ui, node_count: usize, particle_count: usize) {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(
-                    "{} peers / {} particles",
-                    peer_count, particle_count
+                    "{} nodes / {} particles",
+                    node_count, particle_count
                 ))
                 .color(colors::TEXT_MUTED)
                 .monospace()
@@ -817,6 +839,53 @@ impl JamApp {
             );
 
             legend_y += row_height;
+        }
+    }
+
+    /// Draw collapsing pulse circles as CPU overlay on the ring.
+    fn draw_pulses(
+        &self,
+        painter: &egui::Painter,
+        center: egui::Pos2,
+        pixel_radius: f32,
+        num_nodes: f32,
+        now: f32,
+    ) {
+        use std::f32::consts::PI;
+        const PULSE_DURATION: f32 = 0.4;
+        const MAX_PULSE_RADIUS: f32 = 40.0;
+
+        for pulse in &self.active_pulses {
+            let age = now - pulse.birth_time;
+            if age < 0.0 || age >= PULSE_DURATION {
+                continue;
+            }
+
+            // t goes from 0 (just born, circle is big) to 1 (collapsed to dot)
+            let t = age / PULSE_DURATION;
+
+            // Circle radius: starts at MAX, collapses to 0 (quadratic ease-in)
+            let radius_factor = (1.0 - t) * (1.0 - t);
+            let pulse_radius = MAX_PULSE_RADIUS * radius_factor;
+
+            // Validator position on ring
+            let angle = (pulse.node_index as f32 / num_nodes) * 2.0 * PI - PI * 0.5;
+            let pos = center + egui::vec2(angle.cos(), angle.sin()) * pixel_radius;
+
+            // Color from event type, alpha fades out
+            let base_color = self.get_event_color(pulse.event_type);
+            let alpha = (180.0 * (1.0 - t)) as u8;
+            let color = egui::Color32::from_rgba_unmultiplied(
+                base_color.r(),
+                base_color.g(),
+                base_color.b(),
+                alpha,
+            );
+
+            // Stroke width: thicker at start, thinner as it collapses
+            let stroke_width = 1.0 + 1.5 * (1.0 - t);
+
+            painter.circle_stroke(pos, pulse_radius, egui::Stroke::new(stroke_width, color));
         }
     }
 

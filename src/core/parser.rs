@@ -5,7 +5,8 @@
 //! Directed events populate the vring visualization buffers.
 
 use super::{BestBlockData, Event, EventStore, TimeSeriesData};
-use crate::vring::{DirectedEventBuffer, DirectedParticleInstance, PeerRegistry};
+use super::events::EventType;
+use crate::vring::{DirectedEventBuffer, DirectedParticleInstance, PulseEvent};
 use serde_json::Value;
 use tracing::{debug, trace, warn};
 
@@ -17,8 +18,8 @@ pub fn parse_event(
     time_series: &mut TimeSeriesData,
     blocks: &mut BestBlockData,
     events: &mut EventStore,
-    peer_registry: &mut PeerRegistry,
     directed_buffer: &mut DirectedEventBuffer,
+    pulse_events: &mut Vec<PulseEvent>,
     now: f64,
 ) -> Option<()> {
     trace!(len = msg.len(), "Parsing message");
@@ -49,19 +50,32 @@ pub fn parse_event(
     // Store full event for all visualizations
     events.push(node_id, event.clone(), now);
 
+    // Emit collapsing-pulse for Authoring and WorkPackageSubmission
+    match event.event_type() {
+        EventType::Authoring | EventType::WorkPackageSubmission => {
+            if let Some(node_index) = events.node_index(node_id) {
+                pulse_events.push(PulseEvent {
+                    node_index,
+                    event_type: event.event_type() as u8,
+                    birth_time: now as f32,
+                });
+            }
+        }
+        _ => {}
+    }
+
     // Handle directed events for vring visualization
     if let Some(directed) = event.directed_peer() {
-        if let Some(peer_index) = peer_registry.get_or_insert(directed.peer_id) {
-            // Node index comes from EventStore (assigned on first event from this node)
+        // Resolve peer_id to node_id via hex encoding (jamtart uses hex::encode(peer_id) as node_id)
+        let peer_node_id = hex::encode(directed.peer_id);
+        if let Some(peer_index) = events.node_index(&peer_node_id) {
             if let Some(node_index) = events.node_index(node_id) {
-                // Determine source/target based on direction
                 let (source, target) = if directed.is_outbound {
                     (node_index, peer_index)
                 } else {
                     (peer_index, node_index)
                 };
 
-                // Generate curve_seed from peer_id bytes for deterministic but varied paths
                 let curve_seed = {
                     let bytes = directed.peer_id;
                     let combined =
@@ -114,7 +128,6 @@ mod tests {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
         let mut events = EventStore::new(100, 60.0);
-        let mut peer_registry = PeerRegistry::default();
         let mut directed_buffer = DirectedEventBuffer::default();
 
         let msg = r#"{
@@ -143,8 +156,8 @@ mod tests {
             &mut ts,
             &mut blocks,
             &mut events,
-            &mut peer_registry,
             &mut directed_buffer,
+            &mut Vec::new(),
             0.0,
         );
         assert!(result.is_some());
@@ -157,7 +170,6 @@ mod tests {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
         let mut events = EventStore::new(100, 60.0);
-        let mut peer_registry = PeerRegistry::default();
         let mut directed_buffer = DirectedEventBuffer::default();
 
         let msg = r#"{
@@ -180,8 +192,8 @@ mod tests {
             &mut ts,
             &mut blocks,
             &mut events,
-            &mut peer_registry,
             &mut directed_buffer,
+            &mut Vec::new(),
             0.0,
         );
         assert!(result.is_some());
@@ -194,7 +206,6 @@ mod tests {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
         let mut events = EventStore::new(100, 60.0);
-        let mut peer_registry = PeerRegistry::default();
         let mut directed_buffer = DirectedEventBuffer::default();
 
         let msg = r#"{"type": "connected", "data": {"message": "hello"}}"#;
@@ -204,8 +215,8 @@ mod tests {
             &mut ts,
             &mut blocks,
             &mut events,
-            &mut peer_registry,
             &mut directed_buffer,
+            &mut Vec::new(),
             0.0,
         );
         assert!(result.is_none());
@@ -216,8 +227,27 @@ mod tests {
         let mut ts = TimeSeriesData::new(10, 100);
         let mut blocks = BestBlockData::new(10);
         let mut events = EventStore::new(100, 60.0);
-        let mut peer_registry = PeerRegistry::default();
         let mut directed_buffer = DirectedEventBuffer::default();
+
+        // The recipient peer_id [1,2,3,...,32] hex-encodes to this node_id.
+        // We must pre-register this node in EventStore so the parser can resolve it.
+        let recipient_node_id = hex::encode([1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]);
+        // Seed EventStore with a dummy event so the recipient has a node_index
+        let dummy_msg = format!(r#"{{
+            "type": "event",
+            "data": {{
+                "event": {{
+                    "Status": {{
+                        "num_peers": 1, "num_val_peers": 0, "num_sync_peers": 0,
+                        "num_guarantees": [], "num_shards": 0, "shards_size": 0,
+                        "num_preimages": 0, "preimages_size": 0, "timestamp": 0
+                    }}
+                }},
+                "event_type": 10,
+                "node_id": "{}"
+            }}
+        }}"#, recipient_node_id);
+        parse_event(&dummy_msg, &mut ts, &mut blocks, &mut events, &mut directed_buffer, &mut Vec::new(), 0.0);
 
         // SendingGuarantee is a directed event (outbound to recipient peer)
         let msg = r#"{
@@ -240,22 +270,21 @@ mod tests {
             &mut ts,
             &mut blocks,
             &mut events,
-            &mut peer_registry,
             &mut directed_buffer,
+            &mut Vec::new(),
             1.5,
         );
         assert!(result.is_some());
 
-        // Verify directed event was captured
-        assert_eq!(peer_registry.len(), 1); // One peer registered
-        assert_eq!(directed_buffer.len(), 1); // One particle created
+        // Verify directed event created a particle (peer resolved via EventStore)
+        assert_eq!(directed_buffer.len(), 1);
 
         // Verify particle properties
         let particles = directed_buffer.get_active_particles(2.0, 5.0);
         assert_eq!(particles.len(), 1);
         let p = &particles[0];
-        assert_eq!(p.source_index, 0.0); // Node index (first node seen)
-        assert_eq!(p.target_index, 0.0); // Peer index (first peer seen)
+        assert_eq!(p.source_index, 1.0); // node_abc = second node registered (index 1)
+        assert_eq!(p.target_index, 0.0); // recipient = first node registered (index 0)
         assert_eq!(p.birth_time, 1.5);
         assert_eq!(p.event_type, 106.0); // SendingGuarantee
     }

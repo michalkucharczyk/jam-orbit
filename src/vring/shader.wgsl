@@ -126,14 +126,8 @@ fn vs_main(
     }
 
     // Get source and target positions on the ring
-    var source_pos = validator_position(source_index);
+    let source_pos = validator_position(source_index);
     let target_pos = validator_position(target_index);
-
-    // WorkPackageSubmission (event_type 90): arrives from outer circle at target's angle, straight line, bigger
-    let is_wp_submission = u32(event_type) == 90u;
-    if is_wp_submission {
-        source_pos = target_pos * 1.2;
-    }
 
     // Compute control point for bezier curve
     let mid = (source_pos + target_pos) * 0.5;
@@ -141,29 +135,20 @@ fn vs_main(
     let perp = normalize(vec2(-diff.y, diff.x));
 
     // Curve deviation based on seed and distance
-    // WorkPackageSubmission travels in a straight line (no curve)
+    // Push outward more for longer paths (crossing center)
     let dist = length(diff);
-    var curve_amount = curve_seed * dist * 0.3;
-    if is_wp_submission {
-        curve_amount = 0.0;
-    }
+    let curve_amount = curve_seed * dist * 0.3;
     let control = mid + perp * curve_amount;
 
     // Get position along bezier curve
     let pos = bezier_quadratic(source_pos, control, target_pos, t);
 
-    // WorkPackageSubmission particles are 2.5× larger
-    var ps = uniforms.point_size;
-    if is_wp_submission {
-        ps *= 2.5;
-    }
-
     // Apply aspect ratio correction + quad offset scaled by point_size
     // point_size is in NDC units (e.g. 0.005 = ~3px on a 600px viewport)
     // Quad X offset also divided by aspect_ratio so particles stay circular
     let corrected_pos = vec2(
-        (pos.x + quad_offset.x * ps) / uniforms.aspect_ratio,
-        pos.y + quad_offset.y * ps
+        (pos.x + quad_offset.x * uniforms.point_size) / uniforms.aspect_ratio,
+        pos.y + quad_offset.y * uniforms.point_size
     );
 
     out.clip_position = vec4(corrected_pos, 0.0, 1.0);

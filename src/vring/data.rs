@@ -57,6 +57,21 @@ impl DirectedParticleInstance {
 }
 
 // ============================================================================
+// PulseEvent - staging entry for collapsing-pulse animations
+// ============================================================================
+
+/// Staging entry for a collapsing-pulse event (written by parser, drained by app).
+#[derive(Clone, Copy, Debug)]
+pub struct PulseEvent {
+    /// Validator node index on the ring
+    pub node_index: u16,
+    /// Event type (for color selection: 40=Authoring, 90=WP Submission)
+    pub event_type: u8,
+    /// Birth time (app-relative seconds)
+    pub birth_time: f32,
+}
+
+// ============================================================================
 // PeerRegistry - PeerId to node index mapping
 // ============================================================================
 
