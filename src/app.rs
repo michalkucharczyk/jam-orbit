@@ -9,7 +9,10 @@ use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
 
-use crate::core::{parse_event, BestBlockData, EventStore, TimeSeriesData, EVENT_CATEGORIES};
+use crate::core::{
+    event_color_rgb, event_name, parse_event, BestBlockData, EventStore, TimeSeriesData,
+    EVENT_CATEGORIES,
+};
 use crate::theme::{colors, minimal_visuals};
 use crate::time::now_seconds;
 use crate::vring::{DirectedEventBuffer, PulseEvent};
@@ -82,6 +85,8 @@ pub struct JamApp {
     selected_events: Vec<bool>,
     /// Toggle event selector panel visibility
     show_event_selector: bool,
+    /// Currently selected category index in the filter panel
+    selected_category: usize,
     /// Toggle legend overlay visibility
     show_legend: bool,
     /// Currently active tab
@@ -104,6 +109,11 @@ impl JamApp {
     #[cfg(target_arch = "wasm32")]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(minimal_visuals());
+        let mut style = (*cc.egui_ctx.style()).clone();
+        for (_text_style, font_id) in style.text_styles.iter_mut() {
+            font_id.size *= 1.5;
+        }
+        cc.egui_ctx.set_style(style);
 
         let data = Rc::new(RefCell::new(SharedData {
             time_series: TimeSeriesData::new(1024, 200),
@@ -150,6 +160,7 @@ impl JamApp {
             fps_counter: FpsCounter::new(),
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
+            selected_category: 0,
             show_legend: true,
             active_tab: ActiveTab::default(),
             active_pulses: Vec::new(),
@@ -160,6 +171,11 @@ impl JamApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(cc: &eframe::CreationContext<'_>, use_cpu: bool) -> Self {
         cc.egui_ctx.set_visuals(minimal_visuals());
+        let mut style = (*cc.egui_ctx.style()).clone();
+        for (_text_style, font_id) in style.text_styles.iter_mut() {
+            font_id.size *= 1.5;
+        }
+        cc.egui_ctx.set_style(style);
 
         // Register GPU renderers unless CPU mode requested
         let scatter_texture_id = if !use_cpu {
@@ -217,6 +233,7 @@ impl JamApp {
             fps_counter: FpsCounter::new(),
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
+            selected_category: 0,
             show_legend: true,
             active_tab: ActiveTab::default(),
             use_cpu,
@@ -324,11 +341,6 @@ impl eframe::App for JamApp {
             .show(ctx, |ui| {
                 self.render_header(ui);
 
-                if self.show_event_selector {
-                    ui.add_space(4.0);
-                    self.render_event_selector(ui);
-                }
-
                 ui.add_space(8.0);
 
                 match self.active_tab {
@@ -336,6 +348,11 @@ impl eframe::App for JamApp {
                     ActiveTab::Ring => self.render_ring_tab(ui),
                 }
             });
+
+        // Filter modal window
+        if self.show_event_selector {
+            self.render_event_selector(ctx);
+        }
 
         // Update scatter texture reference after callback has rendered
         #[cfg(not(target_arch = "wasm32"))]
@@ -397,7 +414,7 @@ impl JamApp {
                 WsState::Error(_) => (egui::Color32::from_rgb(200, 100, 100), "Error"),
             };
 
-            ui.colored_label(status_color, egui::RichText::new(status_text).size(11.0));
+            ui.colored_label(status_color, egui::RichText::new(status_text));
 
             ui.add_space(10.0);
 
@@ -405,46 +422,46 @@ impl JamApp {
                 egui::RichText::new(format!("{:.0} fps", self.fps_counter.fps()))
                     .color(colors::TEXT_SECONDARY)
                     .monospace()
-                    .size(11.0),
+                    ,
             );
 
             ui.label(
                 egui::RichText::new("/")
                     .color(colors::TEXT_MUTED)
-                    .size(11.0),
+                    ,
             );
 
             ui.label(
                 egui::RichText::new(format!("{} validators", validator_count))
                     .color(colors::TEXT_MUTED)
                     .monospace()
-                    .size(11.0),
+                    ,
             );
 
             if let Some(slot) = highest_slot {
                 ui.label(
                     egui::RichText::new("/")
                         .color(colors::TEXT_MUTED)
-                        .size(11.0),
+                        ,
                 );
                 ui.label(
                     egui::RichText::new(format!("slot {}", slot))
                         .color(colors::TEXT_MUTED)
                         .monospace()
-                        .size(11.0),
+                        ,
                 );
             }
 
             ui.label(
                 egui::RichText::new("/")
                     .color(colors::TEXT_MUTED)
-                    .size(11.0),
+                    ,
             );
             ui.label(
                 egui::RichText::new(format!("{} nodes", event_count))
                     .color(colors::TEXT_MUTED)
                     .monospace()
-                    .size(11.0),
+                    ,
             );
 
             ui.add_space(20.0);
@@ -464,7 +481,7 @@ impl JamApp {
             if ui
                 .selectable_label(
                     self.active_tab == ActiveTab::Graphs,
-                    egui::RichText::new("Graphs").color(graphs_color).size(11.0),
+                    egui::RichText::new("Graphs").color(graphs_color),
                 )
                 .clicked()
             {
@@ -473,7 +490,7 @@ impl JamApp {
             if ui
                 .selectable_label(
                     self.active_tab == ActiveTab::Ring,
-                    egui::RichText::new("Ring").color(ring_color).size(11.0),
+                    egui::RichText::new("Ring").color(ring_color),
                 )
                 .clicked()
             {
@@ -484,7 +501,7 @@ impl JamApp {
                 ui.label(
                     egui::RichText::new("JAM")
                         .color(colors::TEXT_PRIMARY)
-                        .size(12.0),
+                        ,
                 );
 
                 ui.add_space(10.0);
@@ -495,7 +512,7 @@ impl JamApp {
                     "Filter ▼"
                 };
                 if ui
-                    .button(egui::RichText::new(filter_text).size(11.0))
+                    .button(egui::RichText::new(filter_text))
                     .clicked()
                 {
                     self.show_event_selector = !self.show_event_selector;
@@ -507,7 +524,7 @@ impl JamApp {
                     "Legend ○"
                 };
                 if ui
-                    .button(egui::RichText::new(legend_text).size(11.0))
+                    .button(egui::RichText::new(legend_text))
                     .clicked()
                 {
                     self.show_legend = !self.show_legend;
@@ -693,7 +710,7 @@ impl JamApp {
                 ))
                 .color(colors::TEXT_MUTED)
                 .monospace()
-                .size(10.0),
+                .size(14.0),
             );
         });
 
@@ -784,7 +801,7 @@ impl JamApp {
                 ))
                 .color(colors::TEXT_MUTED)
                 .monospace()
-                .size(10.0),
+                .size(14.0),
             );
         });
     }
@@ -914,7 +931,7 @@ impl JamApp {
         ui.label(
             egui::RichText::new("Peer Count")
                 .color(colors::TEXT_MUTED)
-                .size(10.0),
+                .size(14.0),
         );
 
         let (point_count, y_min, y_max, series_data) = with_data!(self, |data| {
@@ -980,7 +997,7 @@ impl JamApp {
         ui.label(
             egui::RichText::new("Best Block")
                 .color(colors::TEXT_MUTED)
-                .size(10.0),
+                .size(14.0),
         );
 
         let (max_block, points_data) = with_data!(self, |data| {
@@ -1024,7 +1041,7 @@ impl JamApp {
         ui.label(
             egui::RichText::new("Finalized Block")
                 .color(colors::TEXT_MUTED)
-                .size(10.0),
+                .size(14.0),
         );
 
         let (max_finalized, points_data) = with_data!(self, |data| {
@@ -1084,7 +1101,7 @@ impl JamApp {
         ui.label(
             egui::RichText::new("Event Particles")
                 .color(colors::TEXT_MUTED)
-                .size(10.0),
+                .size(14.0),
         );
 
         let now = now_seconds();
@@ -1162,7 +1179,7 @@ impl JamApp {
         ui.label(
             egui::RichText::new("Event Particles")
                 .color(colors::TEXT_MUTED)
-                .size(10.0),
+                .size(14.0),
         );
 
         let now = now_seconds();
@@ -1234,7 +1251,7 @@ impl JamApp {
         ui.label(
             egui::RichText::new("Event Rate (per node)")
                 .color(colors::TEXT_MUTED)
-                .size(10.0),
+                .size(14.0),
         );
 
         let now = now_seconds();
@@ -1279,59 +1296,188 @@ impl JamApp {
             });
     }
 
-    fn render_event_selector(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui
-                .button(
-                    egui::RichText::new("All")
-                        .color(colors::TEXT_SECONDARY)
-                        .size(11.0),
-                )
-                .clicked()
-            {
-                self.selected_events.fill(true);
-            }
-            if ui
-                .button(
-                    egui::RichText::new("None")
-                        .color(colors::TEXT_SECONDARY)
-                        .size(11.0),
-                )
-                .clicked()
-            {
-                self.selected_events.fill(false);
-            }
-            ui.add_space(10.0);
-
-            for category in EVENT_CATEGORIES {
-                let all_selected = category
-                    .event_types
-                    .iter()
-                    .all(|&et| self.selected_events[et as usize]);
-                let mut cat_checked = all_selected;
-
-                let text_color = if all_selected {
-                    colors::TEXT_PRIMARY
-                } else {
-                    colors::TEXT_SECONDARY
-                };
-
-                if ui
-                    .checkbox(
-                        &mut cat_checked,
-                        egui::RichText::new(category.name)
-                            .color(text_color)
-                            .size(11.0),
-                    )
-                    .on_hover_text(format!("{} events", category.event_types.len()))
-                    .changed()
-                {
-                    for &et in category.event_types {
-                        self.selected_events[et as usize] = cat_checked;
+    fn render_event_selector(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        egui::Window::new("Event Filter")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(600.0)
+            .default_height(500.0)
+            .default_pos(egui::pos2(300.0, 100.0))
+            .show(ctx, |ui| {
+                // Global All/None buttons
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(egui::RichText::new("All").size(16.0))
+                        .clicked()
+                    {
+                        self.selected_events.fill(true);
                     }
-                }
-            }
-        });
+                    if ui
+                        .button(egui::RichText::new("None").size(16.0))
+                        .clicked()
+                    {
+                        self.selected_events.fill(false);
+                    }
+                });
+
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                // Two-panel layout using columns
+                ui.columns(2, |columns| {
+                    // Left column: category list
+                    columns[0].vertical(|ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("filter_categories")
+                            .show(ui, |ui| {
+                                for (cat_idx, category) in EVENT_CATEGORIES.iter().enumerate() {
+                                    let selected_count = category
+                                        .event_types
+                                        .iter()
+                                        .filter(|&&et| self.selected_events[et as usize])
+                                        .count();
+                                    let total = category.event_types.len();
+                                    let all_selected = selected_count == total;
+                                    let none_selected = selected_count == 0;
+
+                                    let is_active = self.selected_category == cat_idx;
+
+                                    ui.horizontal(|ui| {
+                                        // Group checkbox
+                                        let mut cat_checked = all_selected;
+                                        let checkbox_response = ui.checkbox(&mut cat_checked, "");
+                                        // Partial indicator (dash) for mixed state
+                                        if !all_selected && !none_selected {
+                                            let rect = checkbox_response.rect;
+                                            let center = rect.center();
+                                            let half = rect.width() * 0.2;
+                                            ui.painter().line_segment(
+                                                [
+                                                    egui::pos2(center.x - half, center.y),
+                                                    egui::pos2(center.x + half, center.y),
+                                                ],
+                                                egui::Stroke::new(2.0, colors::TEXT_PRIMARY),
+                                            );
+                                        }
+                                        if checkbox_response.changed() {
+                                            for &et in category.event_types {
+                                                self.selected_events[et as usize] = cat_checked;
+                                            }
+                                        }
+
+                                        // Color swatch
+                                        let (r, g, b) = event_color_rgb(category.event_types[0]);
+                                        let swatch_alpha = if none_selected { 60 } else { 200 };
+                                        let swatch_color = egui::Color32::from_rgba_unmultiplied(
+                                            r,
+                                            g,
+                                            b,
+                                            swatch_alpha,
+                                        );
+                                        let (swatch_rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(12.0, 12.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().rect_filled(
+                                            swatch_rect,
+                                            2.0,
+                                            swatch_color,
+                                        );
+
+                                        // Clickable category label
+                                        let text_color = if is_active {
+                                            colors::TEXT_PRIMARY
+                                        } else if none_selected {
+                                            colors::TEXT_MUTED
+                                        } else {
+                                            colors::TEXT_SECONDARY
+                                        };
+
+                                        let label_text = format!(
+                                            "{} ({}/{})",
+                                            category.name, selected_count, total
+                                        );
+                                        let label = ui.selectable_label(
+                                            is_active,
+                                            egui::RichText::new(label_text)
+                                                .color(text_color)
+                                                .size(16.0),
+                                        );
+                                        if label.clicked() {
+                                            self.selected_category = cat_idx;
+                                        }
+                                    });
+                                }
+                            });
+                    });
+
+                    // Right column: individual events for selected category
+                    columns[1].vertical(|ui| {
+                        if self.selected_category < EVENT_CATEGORIES.len() {
+                            let category = &EVENT_CATEGORIES[self.selected_category];
+
+                            // Per-category header with All/None
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(category.name)
+                                        .color(colors::TEXT_PRIMARY)
+                                        .size(16.0)
+                                        .strong(),
+                                );
+                                if ui
+                                    .button(egui::RichText::new("All").size(14.0))
+                                    .clicked()
+                                {
+                                    for &et in category.event_types {
+                                        self.selected_events[et as usize] = true;
+                                    }
+                                }
+                                if ui
+                                    .button(egui::RichText::new("None").size(14.0))
+                                    .clicked()
+                                {
+                                    for &et in category.event_types {
+                                        self.selected_events[et as usize] = false;
+                                    }
+                                }
+                            });
+
+                            ui.add_space(4.0);
+
+                            egui::ScrollArea::vertical()
+                                .id_salt("filter_events")
+                                .show(ui, |ui| {
+                                    for &et in category.event_types {
+                                        let mut enabled = self.selected_events[et as usize];
+                                        let name = event_name(et);
+                                        let text_color = if enabled {
+                                            colors::TEXT_PRIMARY
+                                        } else {
+                                            colors::TEXT_MUTED
+                                        };
+                                        if ui
+                                            .checkbox(
+                                                &mut enabled,
+                                                egui::RichText::new(name)
+                                                    .color(text_color)
+                                                    .size(16.0),
+                                            )
+                                            .changed()
+                                        {
+                                            self.selected_events[et as usize] = enabled;
+                                        }
+                                    }
+                                });
+                        }
+                    });
+                });
+            });
+
+        if !open {
+            self.show_event_selector = false;
+        }
     }
 }
 

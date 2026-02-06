@@ -8,7 +8,7 @@ use super::{BestBlockData, Event, EventStore, TimeSeriesData};
 use super::events::EventType;
 use crate::vring::{DirectedEventBuffer, DirectedParticleInstance, PulseEvent};
 use serde_json::Value;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Parse a WebSocket message and update data structures
 ///
@@ -54,6 +54,12 @@ pub fn parse_event(
     match event.event_type() {
         EventType::Authoring | EventType::WorkPackageSubmission => {
             if let Some(node_index) = events.node_index(node_id) {
+                info!(
+                    event_type = ?event.event_type(),
+                    node_id = &node_id[..8],
+                    node_index,
+                    "PULSE emitted"
+                );
                 pulse_events.push(PulseEvent {
                     node_index,
                     event_type: event.event_type() as u8,
@@ -75,6 +81,23 @@ pub fn parse_event(
                 } else {
                     (peer_index, node_index)
                 };
+
+                let et = event.event_type() as u8;
+                // Log WP-related directed events (90-113) for debugging
+                if et >= 90 && et <= 113 {
+                    info!(
+                        event_type = et,
+                        event_name = crate::core::events::event_name(et),
+                        emitter = &node_id[..8],
+                        emitter_idx = node_index,
+                        peer = &peer_node_id[..8],
+                        peer_idx = peer_index,
+                        is_outbound = directed.is_outbound,
+                        source,
+                        target,
+                        "WP directed particle"
+                    );
+                }
 
                 let curve_seed = {
                     let bytes = directed.peer_id;

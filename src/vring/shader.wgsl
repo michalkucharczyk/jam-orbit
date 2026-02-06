@@ -41,7 +41,8 @@ const RING_RADIUS: f32 = 0.75;
 // Get position on validator ring (circle)
 fn validator_position(index: f32) -> vec2<f32> {
     let angle = (index / uniforms.num_validators) * 2.0 * PI - PI * 0.5;
-    return vec2(cos(angle), sin(angle)) * RING_RADIUS;
+    // Negate Y: wgpu NDC is Y-up, but egui screen coords (CPU overlay) are Y-down.
+    return vec2(cos(angle), -sin(angle)) * RING_RADIUS;
 }
 
 // Quadratic bezier interpolation
