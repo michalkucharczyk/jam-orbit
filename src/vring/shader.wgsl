@@ -15,10 +15,22 @@ var<uniform> uniforms: Uniforms;
 @group(0) @binding(1)
 var<uniform> color_lut: array<vec4<f32>, 16>;
 
+// Event type filter bitfield (256 bits = 8 x u32)
+@group(0) @binding(2)
+var<uniform> event_filter: array<vec4<u32>, 2>;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) quad_uv: vec2<f32>,
 }
+
+// Quad vertex offsets for 2 triangles (6 vertices per instance)
+// Triangle 1: 0,1,2  Triangle 2: 2,1,3
+const QUAD_POS = array<vec2<f32>, 6>(
+    vec2(-1.0, -1.0), vec2( 1.0, -1.0), vec2(-1.0,  1.0),
+    vec2(-1.0,  1.0), vec2( 1.0, -1.0), vec2( 1.0,  1.0),
+);
 
 const PI: f32 = 3.14159265359;
 const RING_RADIUS: f32 = 0.75;
@@ -74,6 +86,7 @@ fn get_event_color(event_type: f32) -> vec4<f32> {
 
 @vertex
 fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
     @location(0) source_index: f32,
     @location(1) target_index: f32,
     @location(2) birth_time: f32,
@@ -83,6 +96,9 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
 
+    let quad_offset = QUAD_POS[vertex_index % 6u];
+    out.quad_uv = quad_offset;
+
     let age = uniforms.current_time - birth_time;
 
     // Compute progress along path [0, 1]
@@ -91,6 +107,17 @@ fn vs_main(
     // Discard completed particles
     if age > travel_duration * 1.5 || age < 0.0 {
         out.clip_position = vec4(2.0, 2.0, 0.0, 1.0);  // Off-screen
+        out.color = vec4(0.0);
+        return out;
+    }
+
+    // Check event type filter bitfield
+    let et = u32(event_type);
+    let vec_idx = et / 128u;
+    let comp_idx = (et % 128u) / 32u;
+    let bit_idx = et % 32u;
+    if (event_filter[vec_idx][comp_idx] & (1u << bit_idx)) == 0u {
+        out.clip_position = vec4(2.0, 2.0, 0.0, 1.0);
         out.color = vec4(0.0);
         return out;
     }
@@ -113,8 +140,13 @@ fn vs_main(
     // Get position along bezier curve
     let pos = bezier_quadratic(source_pos, control, target_pos, t);
 
-    // Apply aspect ratio correction
-    let corrected_pos = vec2(pos.x / uniforms.aspect_ratio, pos.y);
+    // Apply aspect ratio correction + quad offset scaled by point_size
+    // point_size is in NDC units (e.g. 0.005 = ~3px on a 600px viewport)
+    // Quad X offset also divided by aspect_ratio so particles stay circular
+    let corrected_pos = vec2(
+        (pos.x + quad_offset.x * uniforms.point_size) / uniforms.aspect_ratio,
+        pos.y + quad_offset.y * uniforms.point_size
+    );
 
     out.clip_position = vec4(corrected_pos, 0.0, 1.0);
 
@@ -133,7 +165,9 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    if in.color.a <= 0.01 {
+    // Discard outside unit circle for round particles
+    let dist_sq = dot(in.quad_uv, in.quad_uv);
+    if dist_sq > 1.0 || in.color.a <= 0.01 {
         discard;
     }
     return in.color;

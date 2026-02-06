@@ -1,7 +1,8 @@
 //! GPU renderer for validators ring visualization
 //!
 //! Renders directed events as particles traveling between validators
-//! arranged on a circle using GPU instancing.
+//! arranged on a circle using GPU instancing. Draws directly into
+//! egui's render pass via CallbackTrait.
 
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::{self, util::DeviceExt};
@@ -54,7 +55,7 @@ impl Default for Uniforms {
             current_time: 0.0,
             num_validators: 1024.0,
             aspect_ratio: 1.0,
-            point_size: 2.0,
+            point_size: 0.005,
         }
     }
 }
@@ -91,25 +92,45 @@ impl Default for ColorLut {
     }
 }
 
-/// GPU renderer for the validators ring
+/// Event filter bitfield (256 bits = 8 x u32), matches shader's array<vec4<u32>, 2>
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct FilterBitfield {
+    pub words: [u32; 8],
+}
+
+impl FilterBitfield {
+    /// Convert from [u64; 4] bitfield used by DirectedEventBuffer
+    pub fn from_u64_bitfield(bits: &[u64; 4]) -> Self {
+        let mut words = [0u32; 8];
+        for (i, &qword) in bits.iter().enumerate() {
+            words[i * 2] = qword as u32;
+            words[i * 2 + 1] = (qword >> 32) as u32;
+        }
+        Self { words }
+    }
+
+    /// All bits set (all event types enabled)
+    pub fn all_enabled() -> Self {
+        Self { words: [u32::MAX; 8] }
+    }
+}
+
+/// GPU renderer for the validators ring.
+/// Renders directly into egui's render pass (no intermediate texture).
 pub struct RingRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
+    #[allow(dead_code)] // Used in bind group creation
     color_lut_buffer: wgpu::Buffer,
+    filter_buffer: wgpu::Buffer,
     instance_buffers: Vec<wgpu::Buffer>,
     buffer_counts: Vec<u32>,
 
     // Incremental upload tracking
     gpu_write_head: usize,
     total_instances: u32,
-
-    // Render target texture
-    texture: wgpu::Texture,
-    texture_view: wgpu::TextureView,
-    target_format: wgpu::TextureFormat,
-    width: u32,
-    height: u32,
 }
 
 impl RingRenderer {
@@ -134,6 +155,16 @@ impl RingRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -205,8 +236,12 @@ impl RingRenderer {
                 })],
                 compilation_options: Default::default(),
             }),
+            // NOTE: Using TriangleList with 6 vertices/instance for round, sizable particles.
+            // If performance is too slow, switch to PointList (1 vertex/instance, ~6x less work)
+            // by changing topology to PointList and draw(0..1, ..) in paint(), but points are
+            // fixed-size (1px) and cannot be rounded or resized via the shader.
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::PointList,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -224,6 +259,12 @@ impl RingRenderer {
         let color_lut_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ring_color_lut"),
             contents: bytemuck::bytes_of(&ColorLut::default()),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+        });
+
+        let filter_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ring_event_filter"),
+            contents: bytemuck::bytes_of(&FilterBitfield::all_enabled()),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
 
@@ -251,25 +292,23 @@ impl RingRenderer {
                     binding: 1,
                     resource: color_lut_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: filter_buffer.as_entire_binding(),
+                },
             ],
         });
-
-        let (texture, texture_view) = Self::create_texture(device, target_format, 1, 1);
 
         Self {
             pipeline,
             bind_group,
             uniform_buffer,
             color_lut_buffer,
+            filter_buffer,
             instance_buffers,
             buffer_counts: vec![0; NUM_BUFFERS],
             gpu_write_head: 0,
             total_instances: 0,
-            texture,
-            texture_view,
-            target_format,
-            width: 1,
-            height: 1,
         }
     }
 
@@ -279,56 +318,15 @@ impl RingRenderer {
         self.buffer_counts.fill(0);
     }
 
-    fn create_texture(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        width: u32,
-        height: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("ring_render_texture"),
-            size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
-    }
-
-    #[allow(dead_code)]
-    pub fn create_view(&self) -> wgpu::TextureView {
-        self.texture
-            .create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    /// Upload new particles and render to texture
-    pub fn prepare_incremental(
+    /// Upload new particles, uniforms, and filter to GPU buffers.
+    /// Particles are appended incrementally using a circular buffer.
+    pub fn upload_data(
         &mut self,
-        device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        dimensions: [u32; 2],
         new_particles: &[GpuParticle],
         uniforms: &Uniforms,
+        filter: &FilterBitfield,
     ) {
-        // Resize texture if needed
-        if dimensions[0] != self.width || dimensions[1] != self.height {
-            self.width = dimensions[0].max(1);
-            self.height = dimensions[1].max(1);
-            let (texture, view) =
-                Self::create_texture(device, self.target_format, self.width, self.height);
-            self.texture = texture;
-            self.texture_view = view;
-        }
-
         // Upload new particles
         if !new_particles.is_empty() {
             let particle_size = std::mem::size_of::<GpuParticle>();
@@ -370,35 +368,23 @@ impl RingRenderer {
         }
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
+        queue.write_buffer(&self.filter_buffer, 0, bytemuck::bytes_of(filter));
+    }
 
-        // Render to texture
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ring_render_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.texture_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+    pub fn pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
 
-            render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &self.bind_group, &[]);
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
+    }
 
-            for (i, buffer) in self.instance_buffers.iter().enumerate() {
-                let count = self.buffer_counts[i];
-                if count > 0 {
-                    render_pass.set_vertex_buffer(0, buffer.slice(..));
-                    render_pass.draw(0..1, 0..count);
-                }
-            }
-        }
+    pub fn instance_buffers(&self) -> &[wgpu::Buffer] {
+        &self.instance_buffers
+    }
+
+    pub fn buffer_counts(&self) -> &[u32] {
+        &self.buffer_counts
     }
 }
 
@@ -406,17 +392,17 @@ impl RingRenderer {
 pub struct RingCallback {
     pub new_particles: Arc<Vec<GpuParticle>>,
     pub uniforms: Uniforms,
-    pub rect: egui::Rect,
+    pub filter: FilterBitfield,
     pub reset: bool,
 }
 
 impl egui_wgpu::CallbackTrait for RingCallback {
     fn prepare(
         &self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        encoder: &mut wgpu::CommandEncoder,
+        _encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let renderer: &mut RingRenderer = callback_resources.get_mut().unwrap();
@@ -425,23 +411,27 @@ impl egui_wgpu::CallbackTrait for RingCallback {
             renderer.reset();
         }
 
-        renderer.prepare_incremental(
-            device,
-            queue,
-            encoder,
-            [self.rect.width() as u32, self.rect.height() as u32],
-            &self.new_particles,
-            &self.uniforms,
-        );
+        renderer.upload_data(queue, &self.new_particles, &self.uniforms, &self.filter);
         vec![]
     }
 
     fn paint(
         &self,
         _info: egui::PaintCallbackInfo,
-        _render_pass: &mut wgpu::RenderPass<'static>,
-        _callback_resources: &egui_wgpu::CallbackResources,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        callback_resources: &egui_wgpu::CallbackResources,
     ) {
-        // We render to our own texture in prepare(), not to the egui render pass
+        let renderer: &RingRenderer = callback_resources.get().unwrap();
+
+        render_pass.set_pipeline(renderer.pipeline());
+        render_pass.set_bind_group(0, renderer.bind_group(), &[]);
+
+        for (i, buffer) in renderer.instance_buffers().iter().enumerate() {
+            let count = renderer.buffer_counts()[i];
+            if count > 0 {
+                render_pass.set_vertex_buffer(0, buffer.slice(..));
+                render_pass.draw(0..6, 0..count);
+            }
+        }
     }
 }

@@ -23,6 +23,9 @@ use crate::websocket_native::NativeWsClient;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::vring::{FilterBitfield, GpuParticle, RingCallback, RingRenderer, Uniforms};
+
 /// Default WebSocket URL for jamtart
 pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:8080/api/ws";
 
@@ -72,6 +75,12 @@ pub struct JamApp {
     show_event_selector: bool,
     /// Currently active tab
     active_tab: ActiveTab,
+    /// Use CPU rendering for ring (--cpu-ring flag, native only)
+    #[cfg(not(target_arch = "wasm32"))]
+    use_cpu_ring: bool,
+    /// Cursor for incremental GPU particle upload
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_upload_cursor: u64,
 }
 
 impl JamApp {
@@ -131,8 +140,21 @@ impl JamApp {
 
     /// Create new app for native platform
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, use_cpu_ring: bool) -> Self {
         cc.egui_ctx.set_visuals(minimal_visuals());
+
+        // Register GPU ring renderer unless CPU mode requested
+        if !use_cpu_ring {
+            if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+                let renderer =
+                    RingRenderer::new(&render_state.device, render_state.target_format);
+                render_state
+                    .renderer
+                    .write()
+                    .callback_resources
+                    .insert(renderer);
+            }
+        }
 
         let data = SharedData {
             time_series: TimeSeriesData::new(1024, 200),
@@ -153,6 +175,8 @@ impl JamApp {
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
             active_tab: ActiveTab::default(),
+            use_cpu_ring,
+            gpu_upload_cursor: 0,
         }
     }
 
@@ -437,12 +461,107 @@ impl JamApp {
         });
     }
 
-    /// Render the Ring tab content (validators ring visualization)
-    fn render_ring_tab(&self, ui: &mut egui::Ui) {
+    /// Render the Ring tab — routes to GPU or CPU path (native)
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_ring_tab(&mut self, ui: &mut egui::Ui) {
+        if self.use_cpu_ring {
+            self.render_ring_tab_cpu(ui);
+        } else {
+            self.render_ring_tab_gpu(ui);
+        }
+    }
+
+    /// Render the Ring tab — always CPU on WASM
+    #[cfg(target_arch = "wasm32")]
+    fn render_ring_tab(&mut self, ui: &mut egui::Ui) {
+        self.render_ring_tab_cpu(ui);
+    }
+
+    /// GPU ring rendering path (native only).
+    /// Particles rendered by GPU shader, overlays (ring, dots, legend) drawn by CPU.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_ring_tab_gpu(&mut self, ui: &mut egui::Ui) {
         use std::f32::consts::PI;
 
         let now = now_seconds() as f32;
-        let max_age = 5.0_f32; // Show particles for 5 seconds (matches increased travel durations)
+
+        let (peer_count, particle_count, num_nodes, new_particles, new_cursor) = {
+            let data = &self.data;
+            let (particles, cursor, skip) =
+                data.directed_buffer.get_new_since(self.gpu_upload_cursor);
+            let gpu_particles: Vec<GpuParticle> =
+                particles.iter().skip(skip).map(GpuParticle::from).collect();
+            let new_cursor = cursor;
+            (
+                data.peer_registry.len(),
+                data.directed_buffer.len(),
+                data.events.node_count().max(1),
+                gpu_particles,
+                new_cursor,
+            )
+        };
+        self.gpu_upload_cursor = new_cursor;
+
+        // Stats header
+        self.render_ring_stats(ui, peer_count, particle_count);
+
+        // Allocate canvas
+        let available = ui.available_size();
+        let (response, painter) = ui.allocate_painter(available, egui::Sense::hover());
+        let rect = response.rect;
+
+        // Ring geometry matching GPU's coordinate system:
+        // GPU RING_RADIUS = 0.75 in NDC, aspect-corrected → pixel_radius = 0.75 * height/2
+        let center = rect.center();
+        let pixel_radius = 0.75 * rect.height() * 0.5;
+        let num_nodes_f = num_nodes as f32;
+
+        // Draw ring outline and node dots (CPU overlay, matched to GPU coords)
+        painter.circle_stroke(
+            center,
+            pixel_radius,
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(100, 100, 100, 40)),
+        );
+        let num_dots = num_nodes.min(256);
+        for i in 0..num_dots {
+            let angle = (i as f32 / num_nodes_f) * 2.0 * PI - PI * 0.5;
+            let pos = center + egui::vec2(angle.cos(), angle.sin()) * pixel_radius;
+            painter.circle_filled(
+                pos,
+                4.0,
+                egui::Color32::from_rgba_unmultiplied(150, 150, 150, 100),
+            );
+        }
+
+        // GPU paint callback for particles
+        let filter = FilterBitfield::from_u64_bitfield(&self.build_filter_bitfield());
+        let aspect_ratio = rect.width() / rect.height();
+        let uniforms = Uniforms {
+            current_time: now,
+            num_validators: num_nodes as f32,
+            aspect_ratio,
+            point_size: 0.005,
+        };
+        painter.add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            RingCallback {
+                new_particles: Arc::new(new_particles),
+                uniforms,
+                filter,
+                reset: false,
+            },
+        ));
+
+        // Draw color legend (CPU overlay)
+        self.draw_ring_legend(&painter, rect);
+    }
+
+    /// CPU ring rendering path (WASM + native --cpu-ring fallback)
+    fn render_ring_tab_cpu(&self, ui: &mut egui::Ui) {
+        use std::f32::consts::PI;
+
+        let now = now_seconds() as f32;
+        let max_age = 5.0_f32;
 
         let (peer_count, particle_count, num_nodes, active_particles) =
             with_data!(self, |data| {
@@ -450,12 +569,12 @@ impl JamApp {
                 (
                     data.peer_registry.len(),
                     data.directed_buffer.len(),
-                    data.events.node_count().max(1), // Use actual node count (min 1 to avoid div by zero)
+                    data.events.node_count().max(1),
                     particles,
                 )
             });
 
-        // Header with stats
+        // Stats header
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(
@@ -470,60 +589,51 @@ impl JamApp {
             );
         });
 
-        // Reserve the remaining space for the ring visualization
+        // Allocate canvas
         let available = ui.available_size();
-        let (response, painter) =
-            ui.allocate_painter(available, egui::Sense::hover());
+        let (response, painter) = ui.allocate_painter(available, egui::Sense::hover());
         let rect = response.rect;
 
-        // Calculate ring geometry
         let center = rect.center();
         let radius = rect.width().min(rect.height()) * 0.4;
         let num_nodes_f = num_nodes as f32;
 
-        // Draw ring outline (subtle)
+        // Draw ring outline
         painter.circle_stroke(
             center,
             radius,
             egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(100, 100, 100, 40)),
         );
 
-        // Draw node dots on the ring
-        let num_dots = num_nodes.min(256); // Limit for performance
+        // Draw node dots
+        let num_dots = num_nodes.min(256);
         for i in 0..num_dots {
             let angle = (i as f32 / num_nodes_f) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
             painter.circle_filled(
                 pos,
-                2.0,
+                4.0,
                 egui::Color32::from_rgba_unmultiplied(150, 150, 150, 100),
             );
         }
 
-        // Draw active particles
+        // Draw active particles (CPU bezier computation)
         for particle in &active_particles {
             let age = now - particle.birth_time;
             let t = (age / particle.travel_duration).clamp(0.0, 1.0);
 
-            // Source and target positions on ring
-            let source_angle =
-                (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
-            let target_angle =
-                (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+            let source_angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+            let target_angle = (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
 
-            let source_pos =
-                center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
-            let target_pos =
-                center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
+            let source_pos = center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
+            let target_pos = center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
 
-            // Compute bezier control point
             let mid = source_pos + (target_pos - source_pos) * 0.5;
             let diff = target_pos - source_pos;
             let perp = egui::vec2(-diff.y, diff.x).normalized();
             let curve_amount = particle.curve_seed * diff.length() * 0.3;
             let control = mid + perp * curve_amount;
 
-            // Quadratic bezier position
             let one_minus_t = 1.0 - t;
             let pos = egui::Pos2::new(
                 source_pos.x * (one_minus_t * one_minus_t)
@@ -534,10 +644,7 @@ impl JamApp {
                     + target_pos.y * (t * t),
             );
 
-            // Color based on event type
             let color = self.get_event_color(particle.event_type as u8);
-
-            // Alpha fade
             let fade_in = (t / 0.1).min(1.0);
             let fade_out = 1.0 - ((t - 0.9) / 0.1).max(0.0);
             let alpha = (color.a() as f32 * fade_in * fade_out) as u8;
@@ -551,17 +658,32 @@ impl JamApp {
             painter.circle_filled(pos, 3.0, final_color);
         }
 
-        // Draw color legend in bottom-left corner
+        // Draw color legend
+        self.draw_ring_legend(&painter, rect);
+    }
+
+    fn render_ring_stats(&self, ui: &mut egui::Ui, peer_count: usize, particle_count: usize) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} peers / {} particles",
+                    peer_count, particle_count
+                ))
+                .color(colors::TEXT_MUTED)
+                .monospace()
+                .size(10.0),
+            );
+        });
+    }
+
+    fn draw_ring_legend(&self, painter: &egui::Painter, rect: egui::Rect) {
         let legend_x = rect.left() + 10.0;
         let mut legend_y = rect.bottom() - 14.0 * EVENT_CATEGORIES.len() as f32 - 5.0;
         let swatch_size = 8.0;
         let font = egui::FontId::monospace(10.0);
 
         for category in EVENT_CATEGORIES {
-            // Use the first event type in the category for color
             let color = self.get_event_color(category.event_types[0]);
-
-            // Check if any event in this category is enabled
             let enabled = category
                 .event_types
                 .iter()
@@ -571,14 +693,11 @@ impl JamApp {
             let swatch_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
             let text_color = egui::Color32::from_rgba_unmultiplied(160, 160, 160, alpha);
 
-            // Color swatch
             painter.circle_filled(
                 egui::pos2(legend_x + swatch_size * 0.5, legend_y + swatch_size * 0.5),
                 swatch_size * 0.5,
                 swatch_color,
             );
-
-            // Category name
             painter.text(
                 egui::pos2(legend_x + swatch_size + 6.0, legend_y),
                 egui::Align2::LEFT_TOP,

@@ -142,10 +142,11 @@ pub struct DirectedEventBuffer {
     /// Ring buffer of particles
     particles: VecDeque<DirectedParticleInstance>,
     /// Maximum capacity
-    #[allow(dead_code)]
     capacity: usize,
     /// Enabled event types as 256-bit bitfield (4 x u64)
     enabled_types: [u64; 4],
+    /// Monotonic counter: total particles ever pushed (for incremental GPU upload)
+    total_pushed: u64,
 }
 
 impl Default for DirectedEventBuffer {
@@ -161,6 +162,7 @@ impl DirectedEventBuffer {
             particles: VecDeque::with_capacity(capacity.min(100_000)),
             capacity,
             enabled_types: [u64::MAX; 4], // All enabled by default
+            total_pushed: 0,
         }
     }
 
@@ -171,6 +173,21 @@ impl DirectedEventBuffer {
             self.particles.pop_front();
         }
         self.particles.push_back(particle);
+        self.total_pushed += 1;
+    }
+
+    /// Get particles added since `cursor` for incremental GPU upload.
+    /// Returns (particles deque, new cursor, number of items to skip).
+    /// Caller should iterate `particles.iter().skip(skip)` to get only new items.
+    /// If cursor is stale (evicted), returns all buffered particles (skip=0).
+    pub fn get_new_since(&self, cursor: u64) -> (&VecDeque<DirectedParticleInstance>, u64, usize) {
+        let oldest = self.total_pushed.saturating_sub(self.particles.len() as u64);
+        let skip = if cursor >= oldest {
+            (cursor - oldest) as usize
+        } else {
+            0
+        };
+        (&self.particles, self.total_pushed, skip)
     }
 
     /// Enable or disable an event type

@@ -5,7 +5,9 @@
 
 mod data;
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
 mod renderer;
 
 pub use data::{DirectedEventBuffer, DirectedParticleInstance, PeerRegistry};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use renderer::{FilterBitfield, GpuParticle, RingCallback, RingRenderer, Uniforms};

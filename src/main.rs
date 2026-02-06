@@ -25,6 +25,8 @@ fn main() -> eframe::Result<()> {
         .unwrap_or_else(|_| EnvFilter::new("info,jam_vis_poc=debug"));
     fmt().with_env_filter(filter).with_target(true).init();
 
+    let use_cpu_ring = std::env::args().any(|a| a == "--cpu-ring");
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
@@ -35,7 +37,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "JAM Visualizer",
         options,
-        Box::new(|cc| Ok(Box::new(app::JamApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(app::JamApp::new(cc, use_cpu_ring)))),
     )
 }
 
