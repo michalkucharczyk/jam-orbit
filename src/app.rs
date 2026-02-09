@@ -747,27 +747,33 @@ impl JamApp {
             let age = now - particle.birth_time;
             let t = (age / particle.travel_duration).clamp(0.0, 1.0);
 
-            let source_angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
-            let target_angle = (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
-
-            let source_pos = center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
-            let target_pos = center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
-
-            let mid = source_pos + (target_pos - source_pos) * 0.5;
-            let diff = target_pos - source_pos;
-            let perp = egui::vec2(-diff.y, diff.x).normalized();
-            let curve_amount = particle.curve_seed * diff.length() * 0.3;
-            let control = mid + perp * curve_amount;
-
-            let one_minus_t = 1.0 - t;
-            let pos = egui::Pos2::new(
-                source_pos.x * (one_minus_t * one_minus_t)
-                    + control.x * (2.0 * one_minus_t * t)
-                    + target_pos.x * (t * t),
-                source_pos.y * (one_minus_t * one_minus_t)
-                    + control.y * (2.0 * one_minus_t * t)
-                    + target_pos.y * (t * t),
-            );
+            let pos = if particle.source_index == particle.target_index {
+                // Radial: straight outward from validator to outer circle
+                let angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+                let dir = egui::vec2(angle.cos(), angle.sin());
+                let r = radius + (radius * 0.2) * t; // from ring to 1.2× ring
+                center + dir * r
+            } else {
+                // Directed: bezier curve between source and target
+                let source_angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+                let target_angle = (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+                let source_pos = center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
+                let target_pos = center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
+                let mid = source_pos + (target_pos - source_pos) * 0.5;
+                let diff = target_pos - source_pos;
+                let perp = egui::vec2(-diff.y, diff.x).normalized();
+                let curve_amount = particle.curve_seed * diff.length() * 0.3;
+                let control = mid + perp * curve_amount;
+                let one_minus_t = 1.0 - t;
+                egui::Pos2::new(
+                    source_pos.x * (one_minus_t * one_minus_t)
+                        + control.x * (2.0 * one_minus_t * t)
+                        + target_pos.x * (t * t),
+                    source_pos.y * (one_minus_t * one_minus_t)
+                        + control.y * (2.0 * one_minus_t * t)
+                        + target_pos.y * (t * t),
+                )
+            };
 
             let color = self.get_event_color(particle.event_type as u8);
             let fade_in = (t / 0.1).min(1.0);
@@ -873,6 +879,12 @@ impl JamApp {
         const MAX_PULSE_RADIUS: f32 = 40.0;
 
         for pulse in &self.active_pulses {
+            // Respect event type filter
+            let et = pulse.event_type as usize;
+            if et < self.selected_events.len() && !self.selected_events[et] {
+                continue;
+            }
+
             let age = now - pulse.birth_time;
             if age < 0.0 || age >= PULSE_DURATION {
                 continue;

@@ -126,23 +126,27 @@ fn vs_main(
         return out;
     }
 
-    // Get source and target positions on the ring
-    let source_pos = validator_position(source_index);
-    let target_pos = validator_position(target_index);
+    // Compute particle position
+    var pos: vec2<f32>;
 
-    // Compute control point for bezier curve
-    let mid = (source_pos + target_pos) * 0.5;
-    let diff = target_pos - source_pos;
-    let perp = normalize(vec2(-diff.y, diff.x));
-
-    // Curve deviation based on seed and distance
-    // Push outward more for longer paths (crossing center)
-    let dist = length(diff);
-    let curve_amount = curve_seed * dist * 0.3;
-    let control = mid + perp * curve_amount;
-
-    // Get position along bezier curve
-    let pos = bezier_quadratic(source_pos, control, target_pos, t);
+    if source_index == target_index {
+        // Radial: non-directed event, straight outward from validator to outer circle
+        let angle = (source_index / uniforms.num_validators) * 2.0 * PI - PI * 0.5;
+        let dir = vec2(cos(angle), -sin(angle));
+        let r = mix(RING_RADIUS, RING_RADIUS * 1.2, t);
+        pos = dir * r;
+    } else {
+        // Directed: bezier curve between source and target validators
+        let source_pos = validator_position(source_index);
+        let target_pos = validator_position(target_index);
+        let mid = (source_pos + target_pos) * 0.5;
+        let diff = target_pos - source_pos;
+        let perp = normalize(vec2(-diff.y, diff.x));
+        let dist = length(diff);
+        let curve_amount = curve_seed * dist * 0.3;
+        let control = mid + perp * curve_amount;
+        pos = bezier_quadratic(source_pos, control, target_pos, t);
+    }
 
     // Apply aspect ratio correction + quad offset scaled by point_size
     // point_size is in NDC units (e.g. 0.005 = ~3px on a 600px viewport)

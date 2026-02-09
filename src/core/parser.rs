@@ -117,6 +117,25 @@ pub fn parse_event(
                 directed_buffer.push(particle);
             }
         }
+    } else {
+        // Non-directed event: radial particle (source == target = radial sentinel)
+        let dominated_by_pulse = matches!(
+            event.event_type(),
+            EventType::Authoring | EventType::WorkPackageSubmission
+        );
+        if !dominated_by_pulse {
+            if let Some(node_index) = events.node_index(node_id) {
+                let particle = DirectedParticleInstance::new(
+                    node_index,
+                    node_index, // same index = radial mode
+                    now as f32,
+                    1.0, // fixed 1.0s
+                    event.event_type() as u8,
+                    0.0, // no curve
+                );
+                directed_buffer.push(particle);
+            }
+        }
     }
 
     // Special handling for specific event types
@@ -299,16 +318,18 @@ mod tests {
         );
         assert!(result.is_some());
 
-        // Verify directed event created a particle (peer resolved via EventStore)
-        assert_eq!(directed_buffer.len(), 1);
+        // 2 particles: 1 radial from dummy Status + 1 directed from SendingGuarantee
+        assert_eq!(directed_buffer.len(), 2);
 
-        // Verify particle properties
+        // Verify directed particle properties (find by event_type 106)
         let particles = directed_buffer.get_active_particles(2.0, 5.0);
-        assert_eq!(particles.len(), 1);
-        let p = &particles[0];
+        let p = particles.iter().find(|p| p.event_type == 106.0).expect("directed particle");
         assert_eq!(p.source_index, 1.0); // node_abc = second node registered (index 1)
         assert_eq!(p.target_index, 0.0); // recipient = first node registered (index 0)
         assert_eq!(p.birth_time, 1.5);
-        assert_eq!(p.event_type, 106.0); // SendingGuarantee
+
+        // Verify radial particle from dummy Status (source == target = radial sentinel)
+        let r = particles.iter().find(|p| p.event_type == 10.0).expect("radial particle");
+        assert_eq!(r.source_index, r.target_index); // radial sentinel
     }
 }
