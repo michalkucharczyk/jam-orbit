@@ -6,7 +6,7 @@
 use std::collections::{HashMap, VecDeque};
 use tracing::{debug, trace};
 
-use super::events::Event;
+use super::events::{Event, GuaranteeDiscardReason};
 
 /// Time series data - stores num_peers over time per validator
 pub struct TimeSeriesData {
@@ -338,6 +338,244 @@ impl EventStore {
                     }
                 }
             }
+        }
+    }
+
+    /// Aggregate event rate across all nodes for given event types.
+    /// Returns Vec<f64> of length num_buckets (newest last).
+    pub fn compute_aggregate_rate(
+        &self,
+        event_types: &[u8],
+        now: f64,
+        bucket_duration: f64,
+        num_buckets: usize,
+    ) -> Vec<f64> {
+        let aligned_now = (now / bucket_duration).floor() * bucket_duration;
+        let oldest_time = aligned_now - (bucket_duration * num_buckets as f64);
+        let mut buckets = vec![0.0_f64; num_buckets];
+
+        for node in self.nodes.values() {
+            for &et in event_types {
+                if let Some(events) = node.by_type.get(&et) {
+                    for stored in events {
+                        if stored.timestamp < oldest_time || stored.timestamp >= aligned_now {
+                            continue;
+                        }
+                        let age = aligned_now - stored.timestamp;
+                        let bucket_idx = ((age / bucket_duration) as usize).min(num_buckets - 1);
+                        let bucket_idx = num_buckets - 1 - bucket_idx;
+                        buckets[bucket_idx] += 1.0;
+                    }
+                }
+            }
+        }
+
+        buckets
+    }
+
+    /// Count events of specific types across all nodes in time window.
+    pub fn count_events(&self, event_types: &[u8], now: f64, window: f64) -> u64 {
+        let cutoff = now - window;
+        let mut count = 0u64;
+
+        for node in self.nodes.values() {
+            for &et in event_types {
+                if let Some(events) = node.by_type.get(&et) {
+                    for stored in events {
+                        if stored.timestamp >= cutoff {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        count
+    }
+
+    /// Recent events of specific types with reason strings.
+    /// Returns Vec<RecentError> sorted newest-first, up to `limit`.
+    pub fn recent_errors(
+        &self,
+        event_types: &[u8],
+        limit: usize,
+        now: f64,
+        max_age: f64,
+    ) -> Vec<RecentError> {
+        let cutoff = now - max_age;
+        let mut errors: Vec<RecentError> = Vec::new();
+
+        for node in self.nodes.values() {
+            for &et in event_types {
+                if let Some(events) = node.by_type.get(&et) {
+                    for stored in events.iter().rev() {
+                        if stored.timestamp < cutoff {
+                            break;
+                        }
+                        let reason = stored.event.reason().unwrap_or("").to_string();
+                        errors.push(RecentError {
+                            timestamp: stored.timestamp,
+                            node_index: node.index,
+                            event_type: et,
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort newest-first
+        errors.sort_by(|a, b| b.timestamp.partial_cmp(&a.timestamp).unwrap_or(std::cmp::Ordering::Equal));
+        errors.truncate(limit);
+        errors
+    }
+
+    /// Distribution of GuaranteeDiscarded reasons in time window.
+    pub fn discard_reason_distribution(
+        &self,
+        now: f64,
+        window: f64,
+    ) -> Vec<(GuaranteeDiscardReason, u64)> {
+        let cutoff = now - window;
+        let mut counts: HashMap<u8, u64> = HashMap::new();
+
+        for node in self.nodes.values() {
+            if let Some(events) = node.by_type.get(&113) {
+                for stored in events {
+                    if stored.timestamp < cutoff {
+                        continue;
+                    }
+                    if let Event::GuaranteeDiscarded { reason, .. } = &stored.event {
+                        *counts.entry(*reason as u8).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        let all_reasons = [
+            GuaranteeDiscardReason::PackageReportedOnChain,
+            GuaranteeDiscardReason::ReplacedByBetter,
+            GuaranteeDiscardReason::CannotReportOnChain,
+            GuaranteeDiscardReason::TooManyGuarantees,
+            GuaranteeDiscardReason::Other,
+        ];
+
+        all_reasons
+            .iter()
+            .filter_map(|&r| {
+                let c = counts.get(&(r as u8)).copied().unwrap_or(0);
+                if c > 0 { Some((r, c)) } else { None }
+            })
+            .collect()
+    }
+}
+
+/// A recent error event for display
+pub struct RecentError {
+    pub timestamp: f64,
+    pub node_index: u16,
+    pub event_type: u8,
+    pub reason: String,
+}
+
+// ============================================================================
+// New data structures for Phase 3 panels
+// ============================================================================
+
+/// Guarantee queue depth per core, from Status(10).num_guarantees
+pub struct GuaranteeQueueData {
+    /// Latest num_guarantees per validator: [validator_idx] = Vec<u8>
+    pub per_validator: Vec<Vec<u8>>,
+    node_index: HashMap<String, usize>,
+}
+
+impl GuaranteeQueueData {
+    pub fn new(max_validators: usize) -> Self {
+        Self {
+            per_validator: vec![Vec::new(); max_validators],
+            node_index: HashMap::new(),
+        }
+    }
+
+    pub fn update(&mut self, node_id: &str, num_guarantees: Vec<u8>) {
+        let idx = self.get_or_create_index(node_id);
+        self.per_validator[idx] = num_guarantees;
+    }
+
+    /// Sum guarantees per core across all validators -> Vec<u32>
+    pub fn aggregate_per_core(&self) -> Vec<u32> {
+        let max_cores = self.per_validator.iter().map(|v| v.len()).max().unwrap_or(0);
+        if max_cores == 0 {
+            return Vec::new();
+        }
+        let mut totals = vec![0u32; max_cores];
+        for per_core in &self.per_validator {
+            for (core_idx, &count) in per_core.iter().enumerate() {
+                totals[core_idx] += count as u32;
+            }
+        }
+        totals
+    }
+
+    fn get_or_create_index(&mut self, node_id: &str) -> usize {
+        if let Some(&idx) = self.node_index.get(node_id) {
+            return idx;
+        }
+        let idx = self.node_index.len().min(self.per_validator.len() - 1);
+        self.node_index.insert(node_id.to_string(), idx);
+        idx
+    }
+}
+
+/// Per-validator sync status from SyncStatusChanged(13)
+pub struct SyncStatusData {
+    /// (synced, last_update_time) per validator
+    pub status: Vec<(bool, f64)>,
+    node_index: HashMap<String, usize>,
+}
+
+impl SyncStatusData {
+    pub fn new(max_validators: usize) -> Self {
+        Self {
+            status: vec![(false, 0.0); max_validators],
+            node_index: HashMap::new(),
+        }
+    }
+
+    pub fn set(&mut self, node_id: &str, synced: bool, now: f64) {
+        let idx = self.get_or_create_index(node_id);
+        self.status[idx] = (synced, now);
+    }
+
+    pub fn synced_count(&self) -> usize {
+        self.node_index.values().filter(|&&idx| self.status[idx].0).count()
+    }
+
+    pub fn total_count(&self) -> usize {
+        self.node_index.len()
+    }
+
+    fn get_or_create_index(&mut self, node_id: &str) -> usize {
+        if let Some(&idx) = self.node_index.get(node_id) {
+            return idx;
+        }
+        let idx = self.node_index.len().min(self.status.len() - 1);
+        self.node_index.insert(node_id.to_string(), idx);
+        idx
+    }
+}
+
+/// Shard metrics from Status(10): num_shards + shards_size time series
+pub struct ShardMetrics {
+    pub shard_counts: TimeSeriesData,
+    pub shard_sizes: TimeSeriesData,
+}
+
+impl ShardMetrics {
+    pub fn new(num_validators: usize, max_points: usize) -> Self {
+        Self {
+            shard_counts: TimeSeriesData::new(num_validators, max_points),
+            shard_sizes: TimeSeriesData::new(num_validators, max_points),
         }
     }
 }

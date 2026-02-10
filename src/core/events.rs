@@ -1450,6 +1450,29 @@ impl Event {
         }
     }
 
+    /// Extract reason string from error events, if available.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Event::ConnectInFailed { reason, .. }
+            | Event::ConnectOutFailed { reason, .. }
+            | Event::Disconnected { reason, .. }
+            | Event::PeerMisbehaved { reason, .. }
+            | Event::AuthoringFailed { reason, .. }
+            | Event::BlockVerificationFailed { reason, .. }
+            | Event::BlockExecutionFailed { reason, .. }
+            | Event::BlockRequestFailed { reason, .. }
+            | Event::TicketGenerationFailed { reason, .. }
+            | Event::WorkPackageFailed { reason, .. }
+            | Event::WorkPackageSharingFailed { reason, .. }
+            | Event::GuaranteeSendFailed { reason, .. }
+            | Event::GuaranteeReceiveFailed { reason, .. }
+            | Event::ShardRequestFailed { reason, .. }
+            | Event::AssuranceSendFailed { reason, .. }
+            | Event::AssuranceReceiveFailed { reason, .. } => Some(&reason.0),
+            _ => None,
+        }
+    }
+
     /// Get the default travel duration for this event type (in seconds).
     /// Longer durations make motion visible at high event rates.
     pub fn travel_duration(&self) -> f32 {
