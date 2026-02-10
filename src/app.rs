@@ -264,6 +264,11 @@ impl JamApp {
     /// Process incoming WebSocket messages (native only)
     #[cfg(not(target_arch = "wasm32"))]
     fn process_messages(&mut self) {
+        // Time-budget message processing: yield after ~12ms to maintain 60fps.
+        // Remaining messages stay in the channel for the next frame.
+        use std::time::{Duration, Instant};
+        const BUDGET: Duration = Duration::from_millis(12);
+        let deadline = Instant::now() + BUDGET;
         if let Some(ref client) = self.ws_client {
             while let Ok(msg) = client.rx.try_recv() {
                 let now = now_seconds();
@@ -276,6 +281,9 @@ impl JamApp {
                     &mut self.data.pulse_events,
                     now,
                 );
+                if Instant::now() >= deadline {
+                    break;
+                }
             }
         }
     }
