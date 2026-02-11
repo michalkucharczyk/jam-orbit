@@ -49,12 +49,6 @@ impl JamApp {
 
     /// Peer Count time series — moved from original render_time_series()
     fn render_peer_count(&self, ui: &mut egui::Ui) {
-        ui.label(
-            egui::RichText::new("Peer Count")
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
         let (point_count, y_min, y_max, series_data) = with_data!(self, |data| {
             let point_count = data.time_series.point_count();
             let (y_min, y_max) = data
@@ -72,14 +66,14 @@ impl JamApp {
             (point_count, y_min, y_max, series_data)
         });
 
-        let (y_min, y_max) = if y_min > y_max {
-            (0.0, 100.0)
+        let (y_lo, y_hi) = if y_min > y_max {
+            (0.0_f64, 100.0)
         } else {
-            let pad = (y_max - y_min).max(10.0) * 0.1;
-            (y_min - pad, y_max + pad)
+            let pad = ((y_max - y_min) as f64 * 0.2).max(5.0);
+            ((y_min as f64 - pad).max(0.0), y_max as f64 + pad)
         };
 
-        Plot::new("peer_count")
+        let resp = Plot::new("peer_count")
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -88,8 +82,15 @@ impl JamApp {
             .show_background(false)
             .include_x(0.0)
             .include_x(point_count.max(1) as f64)
-            .include_y(y_min as f64)
-            .include_y(y_max as f64)
+            .include_y(y_lo)
+            .include_y(y_hi)
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(|_name, value| {
                 format!("t={} peers={:.0}", value.x as u32, value.y)
             })
@@ -110,16 +111,12 @@ impl JamApp {
                     plot_ui.line(Line::new(points).color(color).width(1.0));
                 }
             });
+
+        Self::paint_plot_title(ui, resp.response.rect, "Peer Count", colors::TEXT_MUTED);
     }
 
     /// Connection events rate (connect vs disconnect)
     fn render_connection_events(&self, ui: &mut egui::Ui) {
-        ui.label(
-            egui::RichText::new("Connection Events")
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
         let now = now_seconds();
 
         // Connected events: ConnectedIn(23) + ConnectedOut(26)
@@ -132,7 +129,10 @@ impl JamApp {
             data.events.compute_aggregate_rate(&[27], now, 1.0, 60)
         });
 
-        Plot::new("connection_events")
+        let max_y = connect_rates.iter().chain(disconnect_rates.iter())
+            .copied().fold(0.0_f64, f64::max);
+
+        let resp = Plot::new("connection_events")
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -142,6 +142,14 @@ impl JamApp {
             .include_x(0.0)
             .include_x(60.0)
             .include_y(0.0)
+            .include_y((max_y + 1.0).max(2.0))
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(|_name, value| {
                 format!("t=-{:.0}s rate={:.1}/s", 60.0 - value.x, value.y)
             })
@@ -176,6 +184,8 @@ impl JamApp {
                     );
                 }
             });
+
+        Self::paint_plot_title(ui, resp.response.rect, "Connection Events", colors::TEXT_MUTED);
     }
 
     /// Sync status dots
@@ -183,12 +193,6 @@ impl JamApp {
         let (synced, total) = with_data!(self, |data| {
             (data.sync_status.synced_count(), data.sync_status.total_count())
         });
-
-        ui.label(
-            egui::RichText::new(format!("Sync Status ({}/{} synced)", synced, total))
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
 
         let status_data: Vec<(bool, f64)> = with_data!(self, |data| {
             data.sync_status.status.clone()
@@ -205,7 +209,7 @@ impl JamApp {
             }
         }
 
-        Plot::new("sync_status")
+        let resp = Plot::new("sync_status")
             .show_axes([false, false])
             .show_grid(false)
             .allow_zoom(false)
@@ -236,6 +240,13 @@ impl JamApp {
                     );
                 }
             });
+
+        Self::paint_plot_title(
+            ui,
+            resp.response.rect,
+            &format!("Sync Status ({}/{} synced)", synced, total),
+            colors::TEXT_MUTED,
+        );
     }
 
     /// Misbehavior counter + sparkline
@@ -246,22 +257,14 @@ impl JamApp {
             data.events.count_events(&[28], now, 60.0)
         });
 
-        ui.label(
-            egui::RichText::new(format!("PeerMisbehaved: {} (60s)", count))
-                .color(if count > 0 {
-                    egui::Color32::from_rgb(255, 100, 100)
-                } else {
-                    colors::TEXT_MUTED
-                })
-                .size(14.0),
-        );
-
         // Sparkline
         let rates: Vec<f64> = with_data!(self, |data| {
             data.events.compute_aggregate_rate(&[28], now, 1.0, 60)
         });
 
-        Plot::new("misbehavior_rate")
+        let max_y = rates.iter().copied().fold(0.0_f64, f64::max);
+
+        let resp = Plot::new("misbehavior_rate")
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -271,6 +274,14 @@ impl JamApp {
             .include_x(0.0)
             .include_x(60.0)
             .include_y(0.0)
+            .include_y((max_y + 1.0).max(2.0))
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(|_name, value| {
                 format!("t=-{:.0}s count={:.0}", 60.0 - value.x, value.y)
             })
@@ -286,5 +297,13 @@ impl JamApp {
                         .width(2.0),
                 );
             });
+
+        let title = format!("PeerMisbehaved: {} (60s)", count);
+        let color = if count > 0 {
+            egui::Color32::from_rgb(255, 100, 100)
+        } else {
+            colors::TEXT_MUTED
+        };
+        Self::paint_plot_title(ui, resp.response.rect, &title, color);
     }
 }

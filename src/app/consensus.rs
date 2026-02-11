@@ -50,12 +50,6 @@ impl JamApp {
 
     /// Block Height Gap scatter: best_block - finalized_block per validator
     fn render_block_height_gap(&self, ui: &mut egui::Ui) {
-        ui.label(
-            egui::RichText::new("Block Height Gap (best - finalized)")
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
         let gap_points: Vec<[f64; 2]> = with_data!(self, |data| {
             data.blocks
                 .best_blocks
@@ -71,17 +65,13 @@ impl JamApp {
         });
 
         if gap_points.is_empty() {
-            ui.label(
-                egui::RichText::new("No data yet")
-                    .color(colors::TEXT_MUTED)
-                    .size(12.0),
-            );
+            Self::paint_plot_title(ui, ui.max_rect(), "Block Height Gap — no data", colors::TEXT_MUTED);
             return;
         }
 
         let max_gap = gap_points.iter().map(|p| p[1]).fold(0.0_f64, f64::max);
 
-        Plot::new("block_height_gap")
+        let resp = Plot::new("block_height_gap")
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -89,7 +79,14 @@ impl JamApp {
             .allow_scroll(false)
             .show_background(false)
             .include_y(0.0)
-            .include_y(max_gap.max(5.0) + 1.0)
+            .include_y(max_gap.max(3.0) + 1.0)
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(|_name, value| {
                 format!("validator={} gap={:.0} slots", value.x as u32, value.y)
             })
@@ -101,16 +98,12 @@ impl JamApp {
                         .filled(true),
                 );
             });
+
+        Self::paint_plot_title(ui, resp.response.rect, "Block Height Gap (best - finalized)", colors::TEXT_MUTED);
     }
 
     /// Assurances rate (sent + received)
     fn render_assurances_rate(&self, ui: &mut egui::Ui) {
-        ui.label(
-            egui::RichText::new("Assurances (sent/received)")
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
         let now = now_seconds();
 
         let sent_rates: Vec<f64> = with_data!(self, |data| {
@@ -120,7 +113,10 @@ impl JamApp {
             data.events.compute_aggregate_rate(&[131], now, 1.0, 60)
         });
 
-        Plot::new("assurances_rate")
+        let max_y = sent_rates.iter().chain(recv_rates.iter())
+            .copied().fold(0.0_f64, f64::max);
+
+        let resp = Plot::new("assurances_rate")
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -130,6 +126,7 @@ impl JamApp {
             .include_x(0.0)
             .include_x(60.0)
             .include_y(0.0)
+            .include_y((max_y * 1.1).max(2.0))
             .label_formatter(|_name, value| {
                 format!("t=-{:.0}s rate={:.1}/s", 60.0 - value.x, value.y)
             })
@@ -161,41 +158,35 @@ impl JamApp {
                     );
                 }
             });
+
+        Self::paint_plot_title(ui, resp.response.rect, "Assurances (sent/received)", colors::TEXT_MUTED);
     }
 
     /// Shard storage metrics from Status events
     fn render_shard_storage(&self, ui: &mut egui::Ui) {
-        ui.label(
-            egui::RichText::new("Shard Storage")
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
-        let (count_series, size_series) = with_data!(self, |data| {
+        let (count_series, size_series, point_count) = with_data!(self, |data| {
             let counts: Vec<Vec<f32>> = data.shard_metrics.shard_counts.series.iter().map(|s| s.clone()).collect();
             let sizes: Vec<Vec<f32>> = data.shard_metrics.shard_sizes.series.iter().map(|s| s.clone()).collect();
-            (counts, sizes)
+            let pc = data.shard_metrics.shard_counts.point_count();
+            (counts, sizes, pc)
         });
 
-        // Use available height for two half-size plots
-        let half_height = (ui.available_height() - 10.0) / 2.0;
+        let half_height = (ui.available_height() - 4.0) / 2.0;
+        let width = ui.available_width();
 
         // Shard count plot
-        ui.allocate_ui(egui::vec2(ui.available_width(), half_height), |ui| {
-            ui.label(
-                egui::RichText::new("num_shards")
-                    .color(colors::TEXT_MUTED)
-                    .size(11.0),
-            );
-
-            Plot::new("shard_counts")
+        ui.allocate_ui(egui::vec2(width, half_height), |ui| {
+            let resp = Plot::new("shard_counts")
                 .show_axes([false, true])
                 .show_grid(false)
                 .allow_zoom(false)
                 .allow_drag(false)
                 .allow_scroll(false)
                 .show_background(false)
+                .include_x(0.0)
+                .include_x(point_count.max(1) as f64)
                 .include_y(0.0)
+                .clamp_grid(true)
                 .show(ui, |plot_ui| {
                     let num_nodes = count_series.len().max(1);
                     let alpha = (255.0_f32 / num_nodes as f32).max(10.0).min(200.0) as u8;
@@ -211,26 +202,25 @@ impl JamApp {
                         plot_ui.line(Line::new(points).color(color).width(1.0));
                     }
                 });
+
+            Self::paint_plot_title(ui, resp.response.rect, "Shard Storage: num_shards", colors::TEXT_MUTED);
         });
 
         ui.add_space(4.0);
 
         // Shard size plot
-        ui.allocate_ui(egui::vec2(ui.available_width(), half_height), |ui| {
-            ui.label(
-                egui::RichText::new("shards_size (bytes)")
-                    .color(colors::TEXT_MUTED)
-                    .size(11.0),
-            );
-
-            Plot::new("shard_sizes")
+        ui.allocate_ui(egui::vec2(width, half_height), |ui| {
+            let resp = Plot::new("shard_sizes")
                 .show_axes([false, true])
                 .show_grid(false)
                 .allow_zoom(false)
                 .allow_drag(false)
                 .allow_scroll(false)
                 .show_background(false)
+                .include_x(0.0)
+                .include_x(point_count.max(1) as f64)
                 .include_y(0.0)
+                .clamp_grid(true)
                 .show(ui, |plot_ui| {
                     let num_nodes = size_series.len().max(1);
                     let alpha = (255.0_f32 / num_nodes as f32).max(10.0).min(200.0) as u8;
@@ -246,6 +236,8 @@ impl JamApp {
                         plot_ui.line(Line::new(points).color(color).width(1.0));
                     }
                 });
+
+            Self::paint_plot_title(ui, resp.response.rect, "Shard Storage: shards_size", colors::TEXT_MUTED);
         });
     }
 
@@ -270,34 +262,19 @@ impl JamApp {
         let spread = if max_slot > min_slot { max_slot - min_slot } else { 0 };
         let is_fork = spread > 2 && distinct_slots > 1;
 
-        if is_fork {
-            ui.label(
-                egui::RichText::new(format!(
-                    "FORK DETECTED: {} distinct slots ({}..{})",
-                    distinct_slots, min_slot, max_slot
-                ))
-                .color(egui::Color32::from_rgb(255, 100, 100))
-                .size(14.0),
-            );
-        } else {
-            ui.label(
-                egui::RichText::new(format!(
-                    "No forks ({} distinct slots, spread={})",
-                    distinct_slots, spread
-                ))
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-            );
-        }
-
-        // Best blocks scatter (moved from old render_best_blocks)
         if best_points.is_empty() {
+            let title = if is_fork {
+                format!("FORK DETECTED: {} distinct slots ({}..{})", distinct_slots, min_slot, max_slot)
+            } else {
+                format!("No forks ({} distinct slots, spread={})", distinct_slots, spread)
+            };
+            Self::paint_plot_title(ui, ui.max_rect(), &title, colors::TEXT_MUTED);
             return;
         }
 
         let max_block = max_slot as f64;
 
-        Plot::new("best_blocks_fork")
+        let resp = Plot::new("best_blocks_fork")
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -306,6 +283,13 @@ impl JamApp {
             .show_background(false)
             .include_y(max_block - 10.0)
             .include_y(max_block + 5.0)
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(|_name, value| {
                 format!("validator={} slot={:.0}", value.x as u32, value.y)
             })
@@ -317,5 +301,14 @@ impl JamApp {
                         .filled(true),
                 );
             });
+
+        let (title, color) = if is_fork {
+            (format!("FORK: {} slots ({}..{})", distinct_slots, min_slot, max_slot),
+             egui::Color32::from_rgb(255, 100, 100))
+        } else {
+            (format!("No forks ({} slots, spread={})", distinct_slots, spread),
+             colors::TEXT_MUTED)
+        };
+        Self::paint_plot_title(ui, resp.response.rect, &title, color);
     }
 }

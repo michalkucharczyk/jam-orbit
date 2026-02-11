@@ -434,19 +434,30 @@ impl JamApp {
         })
     }
 
+    /// Paint a title overlay at the top-left inside a plot rect
+    pub(crate) fn paint_plot_title(ui: &egui::Ui, rect: egui::Rect, title: &str, color: egui::Color32) {
+        ui.painter().text(
+            rect.left_top() + egui::vec2(4.0, 2.0),
+            egui::Align2::LEFT_TOP,
+            title,
+            egui::FontId::proportional(13.0),
+            color,
+        );
+    }
+
     /// Render a standard per-node rate plot (transparent white lines)
     pub(crate) fn render_rate_plot(&self, ui: &mut egui::Ui, id: &str, title: &str, event_types: &[u8]) {
         use egui_plot::{Line, Plot, PlotPoints};
 
-        ui.label(
-            egui::RichText::new(title)
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
         let rates = self.compute_filtered_rates(event_types);
 
-        Plot::new(id)
+        let max_y = rates.iter()
+            .flat_map(|(_, r)| r.iter())
+            .copied()
+            .max()
+            .unwrap_or(0) as f64;
+
+        let resp = Plot::new(id)
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -456,7 +467,14 @@ impl JamApp {
             .include_x(0.0)
             .include_x(60.0)
             .include_y(0.0)
-            .include_y(5.0)
+            .include_y((max_y + 1.0).max(2.0))
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(|_name, value| {
                 format!("t=-{:.0}s rate={:.0}/s", 60.0 - value.x, value.y)
             })
@@ -479,6 +497,8 @@ impl JamApp {
                     plot_ui.line(Line::new(PlotPoints::from(line_points)).color(color).width(1.0));
                 }
             });
+
+        Self::paint_plot_title(ui, resp.response.rect, title, colors::TEXT_MUTED);
     }
 }
 

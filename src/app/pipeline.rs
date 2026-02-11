@@ -57,22 +57,12 @@ impl JamApp {
     }
 
     fn render_queue_per_core(&self, ui: &mut egui::Ui) {
-        ui.label(
-            egui::RichText::new("Queue per Core")
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
         let queue_data: Vec<u32> = with_data!(self, |data| {
             data.guarantee_queue.aggregate_per_core()
         });
 
         if queue_data.is_empty() {
-            ui.label(
-                egui::RichText::new("No data yet")
-                    .color(colors::TEXT_MUTED)
-                    .size(12.0),
-            );
+            Self::paint_plot_title(ui, ui.max_rect(), "Queue per Core — no data", colors::TEXT_MUTED);
             return;
         }
 
@@ -89,7 +79,7 @@ impl JamApp {
 
         let max_y = queue_data.iter().copied().max().unwrap_or(1) as f64;
 
-        Plot::new("queue_per_core")
+        let resp = Plot::new("queue_per_core")
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -97,37 +87,33 @@ impl JamApp {
             .allow_scroll(false)
             .show_background(false)
             .include_y(0.0)
-            .include_y(max_y + 1.0)
+            .include_y((max_y + 1.0).max(2.0))
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(|_name, value| {
                 format!("core={} queue={:.0}", value.x as u32, value.y)
             })
             .show(ui, |plot_ui| {
                 plot_ui.bar_chart(BarChart::new(bars));
             });
+
+        Self::paint_plot_title(ui, resp.response.rect, "Queue per Core", colors::TEXT_MUTED);
     }
 
     fn render_pvm_costs(&self, ui: &mut egui::Ui) {
-        ui.label(
-            egui::RichText::new("Block Execution Rate (47)")
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
         let now = now_seconds();
         let rates: Vec<f64> = with_data!(self, |data| {
             data.events.compute_aggregate_rate(&[47], now, 1.0, 60)
         });
 
-        if rates.iter().all(|&r| r == 0.0) {
-            ui.label(
-                egui::RichText::new("No data yet")
-                    .color(colors::TEXT_MUTED)
-                    .size(12.0),
-            );
-            return;
-        }
+        let max_y = rates.iter().copied().fold(0.0_f64, f64::max);
 
-        Plot::new("pvm_costs")
+        let resp = Plot::new("pvm_costs")
             .show_axes([false, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -137,6 +123,14 @@ impl JamApp {
             .include_x(0.0)
             .include_x(60.0)
             .include_y(0.0)
+            .include_y((max_y + 1.0).max(2.0))
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(|_name, value| {
                 format!("t=-{:.0}s rate={:.1}/s", 60.0 - value.x, value.y)
             })
@@ -149,26 +143,18 @@ impl JamApp {
                 let color = egui::Color32::from_rgb(255, 200, 100);
                 plot_ui.line(Line::new(PlotPoints::from(line_points)).color(color).width(2.0));
             });
+
+        Self::paint_plot_title(ui, resp.response.rect, "Block Execution Rate", colors::TEXT_MUTED);
     }
 
     fn render_discard_reasons(&self, ui: &mut egui::Ui) {
-        ui.label(
-            egui::RichText::new("Discard Reasons (113)")
-                .color(colors::TEXT_MUTED)
-                .size(14.0),
-        );
-
         let now = now_seconds();
         let distribution = with_data!(self, |data| {
             data.events.discard_reason_distribution(now, 60.0)
         });
 
         if distribution.is_empty() {
-            ui.label(
-                egui::RichText::new("No discards")
-                    .color(colors::TEXT_MUTED)
-                    .size(12.0),
-            );
+            Self::paint_plot_title(ui, ui.max_rect(), "Discard Reasons — none", colors::TEXT_MUTED);
             return;
         }
 
@@ -193,7 +179,7 @@ impl JamApp {
 
         let max_y = distribution.iter().map(|(_, c)| *c).max().unwrap_or(1) as f64;
 
-        Plot::new("discard_reasons")
+        let resp = Plot::new("discard_reasons")
             .show_axes([true, true])
             .show_grid(false)
             .allow_zoom(false)
@@ -201,7 +187,14 @@ impl JamApp {
             .allow_scroll(false)
             .show_background(false)
             .include_y(0.0)
-            .include_y(max_y + 1.0)
+            .include_y((max_y + 1.0).max(2.0))
+            .y_axis_formatter(|mark, _| {
+                if (mark.value - mark.value.round()).abs() < 0.01 {
+                    format!("{:.0}", mark.value)
+                } else {
+                    String::new()
+                }
+            })
             .label_formatter(move |_name, value| {
                 let idx = value.x.round() as usize;
                 let name = reason_names.get(idx).unwrap_or(&"?");
@@ -210,5 +203,7 @@ impl JamApp {
             .show(ui, |plot_ui| {
                 plot_ui.bar_chart(BarChart::new(bars));
             });
+
+        Self::paint_plot_title(ui, resp.response.rect, "Discard Reasons", colors::TEXT_MUTED);
     }
 }
