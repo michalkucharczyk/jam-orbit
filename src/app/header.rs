@@ -75,11 +75,11 @@ impl JamApp {
 
             // Tab buttons
             const TABS: &[(ActiveTab, &str)] = &[
+                (ActiveTab::Ring, "Ring"),
                 (ActiveTab::Pipeline, "Pipeline"),
                 (ActiveTab::Network, "Network"),
                 (ActiveTab::Consensus, "Consensus"),
                 (ActiveTab::Errors, "Errors"),
-                (ActiveTab::Ring, "Ring"),
             ];
 
             for &(tab, label) in TABS {

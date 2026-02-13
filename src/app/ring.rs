@@ -168,51 +168,86 @@ impl JamApp {
             );
         }
 
-        // Draw active particles (CPU bezier computation)
+        // Draw active particles (CPU path)
+        const NUM_SAMPLES: usize = 16;
+        const DIRECTED_SPEED: f32 = 8.0;
         for particle in &active_particles {
             let age = now - particle.birth_time;
-            let t = (age / particle.travel_duration).clamp(0.0, 1.0);
+            let color = self.get_event_color(particle.event_type as u8);
 
-            let pos = if particle.source_index == particle.target_index {
-                // Radial: straight outward from validator to outer circle
+            if particle.source_index == particle.target_index {
+                // ── Radial: circle particle (unchanged) ──
+                let t = (age / particle.travel_duration).clamp(0.0, 1.0);
+                if age > particle.travel_duration * 1.5 || age < 0.0 {
+                    continue;
+                }
                 let angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
                 let dir = egui::vec2(angle.cos(), angle.sin());
                 let r = radius + (radius * 0.2) * t;
-                center + dir * r
+                let pos = center + dir * r;
+
+                let fade_in = (t / 0.1).min(1.0);
+                let fade_out = 1.0 - ((t - 0.9) / 0.1).max(0.0);
+                let alpha = (color.a() as f32 * fade_in * fade_out) as u8;
+                let final_color = egui::Color32::from_rgba_unmultiplied(
+                    color.r(), color.g(), color.b(), alpha,
+                );
+                painter.circle_filled(pos, 3.0, final_color);
             } else {
-                // Directed: bezier curve between source and target
-                let source_angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
-                let target_angle = (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
-                let source_pos = center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
-                let target_pos = center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
+                // ── Directed: bezier trail line (4x speed) ──
+                let eff_dur = particle.travel_duration / DIRECTED_SPEED;
+                let t_head = (age / eff_dur).clamp(0.0, 1.0);
+                let t_tail = ((age - eff_dur) / eff_dur).clamp(0.0, 1.0);
+                if age > eff_dur * 2.5 || age < 0.0 || t_head <= t_tail {
+                    continue;
+                }
+
+                let overall = age / (eff_dur * 2.0);
+                let fade_in = (overall / 0.05).min(1.0);
+                let fade_out = 1.0 - ((overall - 0.95) / 0.05).max(0.0);
+                let base_alpha = color.a() as f32 * fade_in * fade_out;
+
+                let source_angle =
+                    (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+                let target_angle =
+                    (particle.target_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
+                let source_pos =
+                    center + egui::vec2(source_angle.cos(), source_angle.sin()) * radius;
+                let target_pos =
+                    center + egui::vec2(target_angle.cos(), target_angle.sin()) * radius;
                 let mid = source_pos + (target_pos - source_pos) * 0.5;
                 let diff = target_pos - source_pos;
                 let perp = egui::vec2(-diff.y, diff.x).normalized();
                 let curve_amount = particle.curve_seed * diff.length() * 0.3;
                 let control = mid + perp * curve_amount;
-                let one_minus_t = 1.0 - t;
-                egui::Pos2::new(
-                    source_pos.x * (one_minus_t * one_minus_t)
-                        + control.x * (2.0 * one_minus_t * t)
-                        + target_pos.x * (t * t),
-                    source_pos.y * (one_minus_t * one_minus_t)
-                        + control.y * (2.0 * one_minus_t * t)
-                        + target_pos.y * (t * t),
-                )
-            };
 
-            let color = self.get_event_color(particle.event_type as u8);
-            let fade_in = (t / 0.1).min(1.0);
-            let fade_out = 1.0 - ((t - 0.9) / 0.1).max(0.0);
-            let alpha = (color.a() as f32 * fade_in * fade_out) as u8;
-            let final_color = egui::Color32::from_rgba_unmultiplied(
-                color.r(),
-                color.g(),
-                color.b(),
-                alpha,
-            );
+                let points: Vec<egui::Pos2> = (0..=NUM_SAMPLES)
+                    .map(|i| {
+                        let frac = i as f32 / NUM_SAMPLES as f32;
+                        let ct = t_tail + (t_head - t_tail) * frac;
+                        let omt = 1.0 - ct;
+                        egui::Pos2::new(
+                            source_pos.x * (omt * omt)
+                                + control.x * (2.0 * omt * ct)
+                                + target_pos.x * (ct * ct),
+                            source_pos.y * (omt * omt)
+                                + control.y * (2.0 * omt * ct)
+                                + target_pos.y * (ct * ct),
+                        )
+                    })
+                    .collect();
 
-            painter.circle_filled(pos, 3.0, final_color);
+                let trail_alpha = (base_alpha * 0.65) as u8;
+                let stroke_color = egui::Color32::from_rgba_unmultiplied(
+                    color.r(), color.g(), color.b(), trail_alpha,
+                );
+                if points.len() >= 2 {
+                    painter.add(egui::Shape::line(
+                        points,
+                        egui::Stroke::new(1.0, stroke_color),
+                    ));
+                }
+            }
         }
 
         // Draw collapsing pulse overlays

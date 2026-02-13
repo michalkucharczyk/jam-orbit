@@ -430,7 +430,7 @@ impl egui_wgpu::CallbackTrait for RingCallback {
             let count = renderer.buffer_counts()[i];
             if count > 0 {
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
-                render_pass.draw(0..6, 0..count);
+                render_pass.draw(0..96, 0..count);
             }
         }
     }
