@@ -320,13 +320,15 @@ pub enum EventType {
 impl EventType {
     #[allow(dead_code)]
     pub fn from_u8(value: u8) -> Option<Self> {
-        // Use a match for valid discriminants
         match value {
             0 => Some(EventType::Dropped),
             10 => Some(EventType::Status),
             11 => Some(EventType::BestBlockChanged),
             12 => Some(EventType::FinalizedBlockChanged),
             13 => Some(EventType::SyncStatusChanged),
+            // SAFETY: EventType is #[repr(u8)] with contiguous discriminants within each
+            // range. The match arms guarantee `value` is a valid discriminant before
+            // transmuting, so the resulting enum value is always well-defined.
             20..=28 => Some(unsafe { std::mem::transmute(value) }),
             40..=47 => Some(unsafe { std::mem::transmute(value) }),
             60..=68 => Some(unsafe { std::mem::transmute(value) }),
@@ -1497,5 +1499,113 @@ impl Event {
             // Default (includes WorkPackageSubmission — pulse handles visual emphasis)
             _ => 2.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_event_type_from_u8_valid_ranges() {
+        assert_eq!(EventType::from_u8(0), Some(EventType::Dropped));
+        assert_eq!(EventType::from_u8(10), Some(EventType::Status));
+        assert_eq!(EventType::from_u8(13), Some(EventType::SyncStatusChanged));
+        assert_eq!(EventType::from_u8(20), Some(EventType::ConnectionRefused));
+        assert_eq!(EventType::from_u8(28), Some(EventType::PeerMisbehaved));
+        assert_eq!(EventType::from_u8(40), Some(EventType::Authoring));
+        assert_eq!(EventType::from_u8(47), Some(EventType::BlockExecuted));
+        assert_eq!(EventType::from_u8(90), Some(EventType::WorkPackageSubmission));
+        assert_eq!(EventType::from_u8(113), Some(EventType::GuaranteeDiscarded));
+        assert_eq!(EventType::from_u8(199), Some(EventType::PreimageDiscarded));
+    }
+
+    #[test]
+    fn test_event_type_from_u8_gaps() {
+        assert_eq!(EventType::from_u8(1), None);
+        assert_eq!(EventType::from_u8(9), None);
+        assert_eq!(EventType::from_u8(14), None);
+        assert_eq!(EventType::from_u8(19), None);
+        assert_eq!(EventType::from_u8(29), None);
+        assert_eq!(EventType::from_u8(39), None);
+        assert_eq!(EventType::from_u8(48), None);
+        assert_eq!(EventType::from_u8(59), None);
+        assert_eq!(EventType::from_u8(69), None);
+        assert_eq!(EventType::from_u8(79), None);
+        assert_eq!(EventType::from_u8(85), None);
+        assert_eq!(EventType::from_u8(89), None);
+        assert_eq!(EventType::from_u8(114), None);
+        assert_eq!(EventType::from_u8(119), None);
+        assert_eq!(EventType::from_u8(200), None);
+        assert_eq!(EventType::from_u8(255), None);
+    }
+
+    #[test]
+    fn test_event_name() {
+        assert_eq!(event_name(0), "Dropped");
+        assert_eq!(event_name(10), "Status");
+        assert_eq!(event_name(106), "SendingGuarantee");
+        assert_eq!(event_name(199), "PreimageDiscarded");
+        assert_eq!(event_name(255), "Unknown");
+    }
+
+    #[test]
+    fn test_event_color_rgb() {
+        assert_eq!(event_color_rgb(0), (128, 128, 128));   // Meta gray
+        assert_eq!(event_color_rgb(10), (100, 200, 100));  // Status green
+        assert_eq!(event_color_rgb(20), (100, 150, 255));  // Connection blue
+        assert_eq!(event_color_rgb(106), (50, 200, 180));  // Guaranteeing teal
+        assert_eq!(event_color_rgb(250), (255, 255, 255)); // Unknown white
+    }
+
+    #[test]
+    fn test_directed_peer_outbound() {
+        let peer_id = [42u8; 32];
+        let event = Event::SendingGuarantee { timestamp: 0, built_id: 1, recipient: peer_id };
+        let dp = event.directed_peer().expect("should be directed");
+        assert_eq!(*dp.peer_id, peer_id);
+        assert!(dp.is_outbound);
+    }
+
+    #[test]
+    fn test_directed_peer_inbound() {
+        let peer_id = [99u8; 32];
+        let event = Event::ReceivingGuarantee { timestamp: 0, sender: peer_id };
+        let dp = event.directed_peer().expect("should be directed");
+        assert_eq!(*dp.peer_id, peer_id);
+        assert!(!dp.is_outbound);
+    }
+
+    #[test]
+    fn test_directed_peer_connection_side() {
+        let peer_id = [7u8; 32];
+        // Local announcer = outbound
+        let event = Event::BlockAnnounced { timestamp: 0, peer: peer_id, announcer: ConnectionSide::Local, slot: 1, hash: [0u8; 32] };
+        let dp = event.directed_peer().unwrap();
+        assert!(dp.is_outbound);
+
+        // Remote announcer = inbound
+        let event = Event::BlockAnnounced { timestamp: 0, peer: peer_id, announcer: ConnectionSide::Remote, slot: 1, hash: [0u8; 32] };
+        let dp = event.directed_peer().unwrap();
+        assert!(!dp.is_outbound);
+    }
+
+    #[test]
+    fn test_directed_peer_none_for_non_directed() {
+        let event = Event::Status { timestamp: 0, num_peers: 1, num_val_peers: 0, num_sync_peers: 0, num_guarantees: vec![], num_shards: 0, shards_size: 0, num_preimages: 0, preimages_size: 0 };
+        assert!(event.directed_peer().is_none());
+    }
+
+    #[test]
+    fn test_travel_duration() {
+        let slow = Event::ConnectingOut { timestamp: 0, to: PeerDetails { peer_id: [0u8; 32], peer_address: PeerAddress { ipv6: [0u8; 16], port: 0 } } };
+        assert_eq!(slow.travel_duration(), 3.0);
+
+        let medium = Event::SendingGuarantee { timestamp: 0, built_id: 0, recipient: [0u8; 32] };
+        assert_eq!(medium.travel_duration(), 2.0);
+
+        // Default case
+        let default_event = Event::Authored { timestamp: 0, authoring_id: 0, outline: BlockOutline { size_bytes: 0, hash: [0u8; 32], num_tickets: 0, num_preimages: 0, total_preimages_size: 0, num_guarantees: 0, num_assurances: 0, num_dispute_verdicts: 0 } };
+        assert_eq!(default_event.travel_duration(), 2.0);
     }
 }

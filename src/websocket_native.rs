@@ -4,7 +4,8 @@
 
 use crate::ws_state::WsState;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use tracing::{error, info, warn};
 
 /// Native WebSocket client that runs in a background thread
@@ -28,7 +29,14 @@ impl NativeWsClient {
         let state_clone = state.clone();
 
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    error!(error = %e, "Failed to create tokio runtime");
+                    *state_clone.lock() = WsState::Error(e.to_string());
+                    return;
+                }
+            };
             rt.block_on(async move {
                 Self::run_websocket(&url, tx, state_clone).await;
             });
@@ -46,12 +54,12 @@ impl NativeWsClient {
         let ws_stream = match connect_async(url).await {
             Ok((stream, _)) => {
                 info!("WebSocket connected");
-                *state.lock().unwrap() = WsState::Connected;
+                *state.lock() = WsState::Connected;
                 stream
             }
             Err(e) => {
                 error!(error = %e, "Failed to connect");
-                *state.lock().unwrap() = WsState::Error(e.to_string());
+                *state.lock() = WsState::Error(e.to_string());
                 return;
             }
         };
@@ -62,7 +70,7 @@ impl NativeWsClient {
         let subscribe = r#"{"type":"Subscribe","filter":{"type":"All"}}"#;
         if let Err(e) = write.send(Message::Text(subscribe.into())).await {
             error!(error = %e, "Failed to send subscribe message");
-            *state.lock().unwrap() = WsState::Error(e.to_string());
+            *state.lock() = WsState::Error(e.to_string());
             return;
         }
 
@@ -77,18 +85,18 @@ impl NativeWsClient {
                 }
                 Ok(Message::Close(_)) => {
                     warn!("WebSocket closed by server");
-                    *state.lock().unwrap() = WsState::Disconnected;
+                    *state.lock() = WsState::Disconnected;
                     break;
                 }
                 Err(e) => {
                     error!(error = %e, "WebSocket error");
-                    *state.lock().unwrap() = WsState::Error(e.to_string());
+                    *state.lock() = WsState::Error(e.to_string());
                     break;
                 }
                 _ => {}
             }
         }
 
-        *state.lock().unwrap() = WsState::Disconnected;
+        *state.lock() = WsState::Disconnected;
     }
 }

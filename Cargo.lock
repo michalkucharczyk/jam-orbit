@@ -1632,6 +1632,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hex",
  "js-sys",
+ "parking_lot",
  "serde",
  "serde_json",
  "tokio",

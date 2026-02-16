@@ -355,4 +355,66 @@ mod tests {
         assert!(!buffer.is_type_enabled(255));
         assert!(buffer.is_type_enabled(254));
     }
+
+    #[test]
+    fn test_get_new_since_empty() {
+        let buffer = DirectedEventBuffer::new(10);
+        let (particles, cursor, skip) = buffer.get_new_since(0);
+        assert!(particles.is_empty());
+        assert_eq!(cursor, 0);
+        assert_eq!(skip, 0);
+    }
+
+    #[test]
+    fn test_get_new_since_not_full() {
+        let mut buffer = DirectedEventBuffer::new(10);
+        buffer.push(DirectedParticleInstance::new(0, 1, 0.0, 1.0, 10, 0.0));
+        buffer.push(DirectedParticleInstance::new(1, 2, 1.0, 1.0, 11, 0.0));
+
+        // cursor=0 → get all 2 items (skip=0)
+        let (_, cursor, skip) = buffer.get_new_since(0);
+        assert_eq!(cursor, 2);
+        assert_eq!(skip, 0);
+
+        // cursor=1 → skip first, get 1 new
+        let (particles, cursor, skip) = buffer.get_new_since(1);
+        assert_eq!(cursor, 2);
+        assert_eq!(skip, 1);
+        assert_eq!(particles.iter().skip(skip).count(), 1);
+
+        // cursor=2 → nothing new
+        let (particles, cursor, skip) = buffer.get_new_since(2);
+        assert_eq!(cursor, 2);
+        assert_eq!(skip, 2);
+        assert_eq!(particles.iter().skip(skip).count(), 0);
+    }
+
+    #[test]
+    fn test_get_new_since_with_eviction() {
+        let mut buffer = DirectedEventBuffer::new(3);
+        // Push 5 items into capacity-3 buffer → items 0,1 evicted
+        for i in 0..5u16 {
+            buffer.push(DirectedParticleInstance::new(i, i + 1, i as f32, 1.0, 10, 0.0));
+        }
+
+        assert_eq!(buffer.len(), 3); // items 2,3,4 remain
+        // total_pushed=5, oldest=5-3=2
+
+        // Stale cursor (cursor=0, but oldest=2) → skip=0, get all 3
+        let (particles, cursor, skip) = buffer.get_new_since(0);
+        assert_eq!(cursor, 5);
+        assert_eq!(skip, 0);
+        assert_eq!(particles.iter().skip(skip).count(), 3);
+
+        // cursor=3 → skip 1, get 2 new
+        let (particles, cursor, skip) = buffer.get_new_since(3);
+        assert_eq!(cursor, 5);
+        assert_eq!(skip, 1);
+        assert_eq!(particles.iter().skip(skip).count(), 2);
+
+        // cursor=5 → nothing new
+        let (particles, _, skip) = buffer.get_new_since(5);
+        assert_eq!(skip, 3);
+        assert_eq!(particles.iter().skip(skip).count(), 0);
+    }
 }

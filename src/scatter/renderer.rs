@@ -383,7 +383,9 @@ impl egui_wgpu::CallbackTrait for ScatterCallback {
         encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let renderer: &mut ScatterRenderer = callback_resources.get_mut().unwrap();
+        let Some(renderer): Option<&mut ScatterRenderer> = callback_resources.get_mut() else {
+            return vec![];
+        };
 
         if self.reset {
             renderer.reset();

@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::core::{
-    parse_event, BestBlockData, EventStore, TimeSeriesData,
+    parse_event, ParserContext, BestBlockData, EventStore, TimeSeriesData,
     EVENT_CATEGORIES, GuaranteeQueueData, SyncStatusData, ShardMetrics,
 };
 use crate::theme::{colors, minimal_visuals};
@@ -32,7 +32,8 @@ use crate::websocket_wasm::WsClient;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::websocket_native::NativeWsClient;
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::scatter::ScatterRenderer;
@@ -166,28 +167,18 @@ impl JamApp {
             move |msg| {
                 let now = now_seconds();
                 let mut data = data_clone.borrow_mut();
-                let SharedData {
-                    ref mut time_series,
-                    ref mut blocks,
-                    ref mut events,
-                    ref mut directed_buffer,
-                    ref mut pulse_events,
-                    ref mut guarantee_queue,
-                    ref mut sync_status,
-                    ref mut shard_metrics,
-                } = *data;
-                parse_event(
-                    &msg,
-                    time_series,
-                    blocks,
-                    events,
-                    directed_buffer,
-                    pulse_events,
-                    guarantee_queue,
-                    sync_status,
-                    shard_metrics,
-                    now,
-                );
+                let d = &mut *data;
+                let mut ctx = ParserContext {
+                    time_series: &mut d.time_series,
+                    blocks: &mut d.blocks,
+                    events: &mut d.events,
+                    directed_buffer: &mut d.directed_buffer,
+                    pulse_events: &mut d.pulse_events,
+                    guarantee_queue: &mut d.guarantee_queue,
+                    sync_status: &mut d.sync_status,
+                    shard_metrics: &mut d.shard_metrics,
+                };
+                parse_event(&msg, &mut ctx, now);
             },
             ws_state.clone(),
         )
@@ -315,18 +306,18 @@ impl JamApp {
         if let Some(ref client) = self.ws_client {
             while let Ok(msg) = client.rx.try_recv() {
                 let now = now_seconds();
-                parse_event(
-                    &msg,
-                    &mut self.data.time_series,
-                    &mut self.data.blocks,
-                    &mut self.data.events,
-                    &mut self.data.directed_buffer,
-                    &mut self.data.pulse_events,
-                    &mut self.data.guarantee_queue,
-                    &mut self.data.sync_status,
-                    &mut self.data.shard_metrics,
-                    now,
-                );
+                let d = &mut self.data;
+                let mut ctx = ParserContext {
+                    time_series: &mut d.time_series,
+                    blocks: &mut d.blocks,
+                    events: &mut d.events,
+                    directed_buffer: &mut d.directed_buffer,
+                    pulse_events: &mut d.pulse_events,
+                    guarantee_queue: &mut d.guarantee_queue,
+                    sync_status: &mut d.sync_status,
+                    shard_metrics: &mut d.shard_metrics,
+                };
+                parse_event(&msg, &mut ctx, now);
                 if Instant::now() >= deadline {
                     break;
                 }
@@ -342,7 +333,7 @@ impl JamApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.ws_state.lock().unwrap().clone()
+            self.ws_state.lock().clone()
         }
     }
 

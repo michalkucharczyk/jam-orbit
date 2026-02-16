@@ -405,7 +405,9 @@ impl egui_wgpu::CallbackTrait for RingCallback {
         _encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let renderer: &mut RingRenderer = callback_resources.get_mut().unwrap();
+        let Some(renderer): Option<&mut RingRenderer> = callback_resources.get_mut() else {
+            return vec![];
+        };
 
         if self.reset {
             renderer.reset();
@@ -421,7 +423,9 @@ impl egui_wgpu::CallbackTrait for RingCallback {
         render_pass: &mut wgpu::RenderPass<'static>,
         callback_resources: &egui_wgpu::CallbackResources,
     ) {
-        let renderer: &RingRenderer = callback_resources.get().unwrap();
+        let Some(renderer): Option<&RingRenderer> = callback_resources.get() else {
+            return;
+        };
 
         render_pass.set_pipeline(renderer.pipeline());
         render_pass.set_bind_group(0, renderer.bind_group(), &[]);

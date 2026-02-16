@@ -579,3 +579,368 @@ impl ShardMetrics {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::events::{Event, Reason, GuaranteeOutline, GuaranteeDiscardReason};
+
+    #[test]
+    fn test_time_series_push_and_eviction() {
+        let mut ts = TimeSeriesData::new(2, 3);
+
+        // Push values to first node
+        ts.push("node1", 1.0);
+        ts.push("node1", 2.0);
+        ts.push("node1", 3.0);
+
+        assert_eq!(ts.validator_count(), 1);
+        assert_eq!(ts.max_series_len(), 3);
+
+        // Push beyond max_points to trigger eviction
+        ts.push("node1", 4.0);
+
+        // Should still have 3 points (oldest evicted)
+        assert_eq!(ts.max_series_len(), 3);
+
+        // Push to second node
+        ts.push("node2", 5.0);
+        assert_eq!(ts.validator_count(), 2);
+
+        // Verify point_count - returns length of first series
+        assert_eq!(ts.point_count(), 3); // node1 has 3 points
+    }
+
+    #[test]
+    fn test_best_block_data() {
+        let mut bbd = BestBlockData::new(10);
+
+        // Set best blocks for two nodes
+        bbd.set_best("node1", 100);
+        bbd.set_best("node2", 150);
+
+        // Set finalized for one node
+        bbd.set_finalized("node1", 90);
+
+        // Verify highest_slot filters zeros and returns max
+        assert_eq!(bbd.highest_slot(), Some(150));
+
+        // Verify highest_finalized filters zeros
+        assert_eq!(bbd.highest_finalized(), Some(90));
+
+        // Set a higher finalized
+        bbd.set_finalized("node2", 95);
+        assert_eq!(bbd.highest_finalized(), Some(95));
+    }
+
+    #[test]
+    fn test_event_store_push_and_count() {
+        let mut store = EventStore::new(100, 60.0);
+
+        let now = 50.0;
+
+        // Push Status events to node1
+        let status_event = Event::Status {
+            timestamp: 0,
+            num_peers: 1,
+            num_val_peers: 0,
+            num_sync_peers: 0,
+            num_guarantees: vec![],
+            num_shards: 0,
+            shards_size: 0,
+            num_preimages: 0,
+            preimages_size: 0,
+        };
+        store.push("node1", status_event.clone(), now);
+        store.push("node1", status_event.clone(), now - 1.0);
+
+        // Push ConnectInFailed to node2
+        let error_event = Event::ConnectInFailed {
+            timestamp: 0,
+            connecting_id: 0,
+            reason: Reason("test error".into()),
+        };
+        store.push("node2", error_event, now - 2.0);
+
+        assert_eq!(store.node_count(), 2);
+
+        // Count Status events (type 10) within window
+        let count = store.count_events(&[10], now, 10.0);
+        assert_eq!(count, 2);
+
+        // Count ConnectInFailed events (type 22)
+        let count = store.count_events(&[22], now, 10.0);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_compute_aggregate_rate() {
+        let mut store = EventStore::new(100, 60.0);
+
+        let now = 60.0;
+        let bucket_duration = 1.0;
+        let num_buckets = 60;
+
+        // Push Status events at known timestamps
+        let status_event = Event::Status {
+            timestamp: 0,
+            num_peers: 1,
+            num_val_peers: 0,
+            num_sync_peers: 0,
+            num_guarantees: vec![],
+            num_shards: 0,
+            shards_size: 0,
+            num_preimages: 0,
+            preimages_size: 0,
+        };
+
+        store.push("node1", status_event.clone(), 59.0);
+        store.push("node1", status_event.clone(), 59.5);
+        store.push("node1", status_event.clone(), 58.0);
+
+        let rates = store.compute_aggregate_rate(&[10], now, bucket_duration, num_buckets);
+
+        // Verify we got the right number of buckets
+        assert_eq!(rates.len(), num_buckets);
+
+        // Sum should be 3 (all events within window)
+        let total: f64 = rates.iter().sum();
+        assert_eq!(total, 3.0);
+
+        // Push event outside window (before oldest_time which is 60.0 - 60.0 = 0.0)
+        // Need to push at negative time or we change now
+        store.push("node1", status_event.clone(), -1.0);
+
+        let rates = store.compute_aggregate_rate(&[10], now, bucket_duration, num_buckets);
+        let total: f64 = rates.iter().sum();
+
+        // Should still be 3 (old event excluded)
+        assert_eq!(total, 3.0);
+    }
+
+    #[test]
+    fn test_compute_rates_per_node() {
+        let mut store = EventStore::new(100, 60.0);
+
+        let now = 60.0;
+        let bucket_duration = 1.0;
+        let num_buckets = 10;
+
+        let status_event = Event::Status {
+            timestamp: 0,
+            num_peers: 1,
+            num_val_peers: 0,
+            num_sync_peers: 0,
+            num_guarantees: vec![],
+            num_shards: 0,
+            shards_size: 0,
+            num_preimages: 0,
+            preimages_size: 0,
+        };
+
+        // Push to node1
+        store.push("node1", status_event.clone(), now - 1.0);
+        store.push("node1", status_event.clone(), now - 2.0);
+
+        // Push to node2
+        store.push("node2", status_event.clone(), now - 1.0);
+
+        let rates = store.compute_rates_per_node(now, bucket_duration, num_buckets, &[true; 256]);
+
+        // Should have 2 nodes
+        assert_eq!(rates.len(), 2);
+
+        // Each entry has buckets
+        for (node_idx, buckets) in &rates {
+            assert!(node_idx < &2);
+            assert_eq!(buckets.len(), num_buckets);
+
+            let total: u32 = buckets.iter().sum();
+            if store.node_index("node1").unwrap() == *node_idx {
+                assert_eq!(total, 2);
+            } else {
+                assert_eq!(total, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn test_prune() {
+        let mut store = EventStore::new(100, 30.0);
+
+        let status_event = Event::Status {
+            timestamp: 0,
+            num_peers: 1,
+            num_val_peers: 0,
+            num_sync_peers: 0,
+            num_guarantees: vec![],
+            num_shards: 0,
+            shards_size: 0,
+            num_preimages: 0,
+            preimages_size: 0,
+        };
+
+        // Push events at different timestamps (in chronological order)
+        store.push("node1", status_event.clone(), 10.0);
+        store.push("node1", status_event.clone(), 50.0);
+        store.push("node1", status_event.clone(), 100.0);
+
+        // Count before prune
+        let count_before = store.count_events(&[10], 100.0, 100.0);
+        assert_eq!(count_before, 3);
+
+        // Prune with current time = 100.0, retention = 30.0
+        // Events older than 70.0 should be removed
+        store.prune(100.0);
+
+        // Count after prune (only event at 100.0 remains)
+        let count_after = store.count_events(&[10], 100.0, 100.0);
+        assert_eq!(count_after, 1);
+    }
+
+    #[test]
+    fn test_recent_errors() {
+        let mut store = EventStore::new(100, 60.0);
+
+        let now = 100.0;
+
+        // Push error events with different reasons and timestamps
+        let error1 = Event::ConnectInFailed {
+            timestamp: 0,
+            connecting_id: 0,
+            reason: Reason("error 1".into()),
+        };
+        let error2 = Event::ConnectInFailed {
+            timestamp: 0,
+            connecting_id: 0,
+            reason: Reason("error 2".into()),
+        };
+        let error3 = Event::ConnectInFailed {
+            timestamp: 0,
+            connecting_id: 0,
+            reason: Reason("error 3".into()),
+        };
+
+        store.push("node1", error1, now - 5.0);
+        store.push("node2", error2, now - 3.0);
+        store.push("node1", error3, now - 1.0);
+
+        // Get recent errors, sorted newest-first
+        let errors = store.recent_errors(&[22], 10, now, 60.0);
+
+        assert_eq!(errors.len(), 3);
+
+        // Verify newest first
+        assert!(errors[0].reason.contains("error 3"));
+        assert!(errors[1].reason.contains("error 2"));
+        assert!(errors[2].reason.contains("error 1"));
+
+        // Test limit
+        let errors_limited = store.recent_errors(&[22], 2, now, 60.0);
+        assert_eq!(errors_limited.len(), 2);
+
+        // Test max_age filter
+        let errors_recent = store.recent_errors(&[22], 10, now, 2.0);
+        assert_eq!(errors_recent.len(), 1); // Only error 3 within 2.0s
+    }
+
+    #[test]
+    fn test_discard_reason_distribution() {
+        let mut store = EventStore::new(100, 60.0);
+
+        let now = 100.0;
+
+        // Create discard events with different reasons
+        let discard1 = Event::GuaranteeDiscarded {
+            timestamp: 0,
+            outline: GuaranteeOutline {
+                work_report_hash: [0u8; 32],
+                slot: 0,
+                guarantors: vec![],
+            },
+            reason: GuaranteeDiscardReason::PackageReportedOnChain,
+        };
+        let discard2 = Event::GuaranteeDiscarded {
+            timestamp: 0,
+            outline: GuaranteeOutline {
+                work_report_hash: [1u8; 32],
+                slot: 0,
+                guarantors: vec![],
+            },
+            reason: GuaranteeDiscardReason::PackageReportedOnChain,
+        };
+        let discard3 = Event::GuaranteeDiscarded {
+            timestamp: 0,
+            outline: GuaranteeOutline {
+                work_report_hash: [2u8; 32],
+                slot: 0,
+                guarantors: vec![],
+            },
+            reason: GuaranteeDiscardReason::ReplacedByBetter,
+        };
+
+        store.push("node1", discard1, now - 1.0);
+        store.push("node1", discard2, now - 2.0);
+        store.push("node2", discard3, now - 3.0);
+
+        let distribution = store.discard_reason_distribution(now, 10.0);
+
+        // Should have counts for both reasons
+        assert!(distribution.len() >= 2);
+
+        let on_chain_count = distribution
+            .iter()
+            .find(|(reason, _)| matches!(reason, GuaranteeDiscardReason::PackageReportedOnChain))
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
+
+        let replaced_count = distribution
+            .iter()
+            .find(|(reason, _)| matches!(reason, GuaranteeDiscardReason::ReplacedByBetter))
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
+
+        assert_eq!(on_chain_count, 2);
+        assert_eq!(replaced_count, 1);
+    }
+
+    #[test]
+    fn test_guarantee_queue_aggregate() {
+        let mut queue = GuaranteeQueueData::new(10);
+
+        // Update validators with per-core counts
+        // Assuming each validator reports counts for multiple cores
+        queue.update("node1", vec![1, 2, 3, 0, 0]);
+        queue.update("node2", vec![2, 1, 0, 1, 0]);
+
+        let aggregate = queue.aggregate_per_core();
+
+        // Verify sums per core
+        assert!(aggregate.len() >= 4);
+        assert_eq!(aggregate[0], 3); // 1 + 2
+        assert_eq!(aggregate[1], 3); // 2 + 1
+        assert_eq!(aggregate[2], 3); // 3 + 0
+        assert_eq!(aggregate[3], 1); // 0 + 1
+    }
+
+    #[test]
+    fn test_sync_status() {
+        let mut sync = SyncStatusData::new(10);
+
+        let now = 100.0;
+
+        // Set sync status for multiple nodes
+        sync.set("node1", true, now);
+        sync.set("node2", true, now);
+        sync.set("node3", false, now);
+
+        assert_eq!(sync.synced_count(), 2);
+        assert_eq!(sync.total_count(), 3);
+
+        // Change status
+        sync.set("node1", false, now);
+
+        assert_eq!(sync.synced_count(), 1);
+        assert_eq!(sync.total_count(), 3);
+    }
+}
