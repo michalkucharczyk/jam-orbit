@@ -58,7 +58,7 @@ impl JamApp {
                 .enumerate()
                 .filter(|(_, (&best, &fin))| best > 0 && fin > 0)
                 .map(|(i, (&best, &fin))| {
-                    let gap = if best >= fin { best - fin } else { 0 };
+                    let gap = best.saturating_sub(fin);
                     [i as f64, gap as f64]
                 })
                 .collect()
@@ -165,8 +165,8 @@ impl JamApp {
     /// Shard storage metrics from Status events
     fn render_shard_storage(&self, ui: &mut egui::Ui) {
         let (count_series, size_series, point_count) = with_data!(self, |data| {
-            let counts: Vec<Vec<f32>> = data.shard_metrics.shard_counts.series.iter().map(|s| s.clone()).collect();
-            let sizes: Vec<Vec<f32>> = data.shard_metrics.shard_sizes.series.iter().map(|s| s.clone()).collect();
+            let counts: Vec<Vec<f32>> = data.shard_metrics.shard_counts.series.to_vec();
+            let sizes: Vec<Vec<f32>> = data.shard_metrics.shard_sizes.series.to_vec();
             let pc = data.shard_metrics.shard_counts.point_count();
             (counts, sizes, pc)
         });
@@ -189,7 +189,7 @@ impl JamApp {
                 .clamp_grid(true)
                 .show(ui, |plot_ui| {
                     let num_nodes = count_series.len().max(1);
-                    let alpha = (255.0_f32 / num_nodes as f32).max(10.0).min(200.0) as u8;
+                    let alpha = (255.0_f32 / num_nodes as f32).clamp(10.0, 200.0) as u8;
 
                     for series in &count_series {
                         if series.len() < 2 { continue; }
@@ -223,7 +223,7 @@ impl JamApp {
                 .clamp_grid(true)
                 .show(ui, |plot_ui| {
                     let num_nodes = size_series.len().max(1);
-                    let alpha = (255.0_f32 / num_nodes as f32).max(10.0).min(200.0) as u8;
+                    let alpha = (255.0_f32 / num_nodes as f32).clamp(10.0, 200.0) as u8;
 
                     for series in &size_series {
                         if series.len() < 2 { continue; }
@@ -259,7 +259,7 @@ impl JamApp {
             (unique.len(), min, max, points)
         });
 
-        let spread = if max_slot > min_slot { max_slot - min_slot } else { 0 };
+        let spread = max_slot.saturating_sub(min_slot);
         let is_fork = spread > 2 && distinct_slots > 1;
 
         if best_points.is_empty() {

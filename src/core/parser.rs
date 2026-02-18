@@ -105,7 +105,7 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
 
                 let et = event.event_type() as u8;
                 // Log WP-related directed events (90-113) for debugging
-                if et >= 90 && et <= 113 {
+                if (90..=113).contains(&et) {
                     info!(
                         event_type = et,
                         event_name = crate::core::events::event_name(et),

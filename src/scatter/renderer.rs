@@ -271,6 +271,7 @@ impl ScatterRenderer {
     }
 
     /// Upload new particles incrementally and render to off-screen texture
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_incremental(
         &mut self,
         device: &wgpu::Device,

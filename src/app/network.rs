@@ -61,7 +61,7 @@ impl JamApp {
                 });
 
             let series_data: Vec<Vec<f32>> =
-                data.time_series.series.iter().map(|s| s.clone()).collect();
+                data.time_series.series.to_vec();
 
             (point_count, y_min, y_max, series_data)
         });

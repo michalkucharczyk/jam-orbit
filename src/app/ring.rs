@@ -294,7 +294,7 @@ impl JamApp {
             }
 
             let age = now - pulse.birth_time;
-            if age < 0.0 || age >= PULSE_DURATION {
+            if !(0.0..PULSE_DURATION).contains(&age) {
                 continue;
             }
 

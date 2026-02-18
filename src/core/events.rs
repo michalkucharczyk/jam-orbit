@@ -329,15 +329,15 @@ impl EventType {
             // SAFETY: EventType is #[repr(u8)] with contiguous discriminants within each
             // range. The match arms guarantee `value` is a valid discriminant before
             // transmuting, so the resulting enum value is always well-defined.
-            20..=28 => Some(unsafe { std::mem::transmute(value) }),
-            40..=47 => Some(unsafe { std::mem::transmute(value) }),
-            60..=68 => Some(unsafe { std::mem::transmute(value) }),
-            80..=84 => Some(unsafe { std::mem::transmute(value) }),
-            90..=113 => Some(unsafe { std::mem::transmute(value) }),
-            120..=131 => Some(unsafe { std::mem::transmute(value) }),
-            140..=153 => Some(unsafe { std::mem::transmute(value) }),
-            160..=178 => Some(unsafe { std::mem::transmute(value) }),
-            190..=199 => Some(unsafe { std::mem::transmute(value) }),
+            20..=28 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
+            40..=47 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
+            60..=68 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
+            80..=84 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
+            90..=113 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
+            120..=131 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
+            140..=153 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
+            160..=178 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
+            190..=199 => Some(unsafe { std::mem::transmute::<u8, EventType>(value) }),
             _ => None,
         }
     }
