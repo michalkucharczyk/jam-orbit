@@ -169,7 +169,7 @@ fn vs_main(
 
         let angle = (source_index / uniforms.num_validators) * 2.0 * PI - PI * 0.5;
         let dir = vec2(cos(angle), -sin(angle));
-        let r = mix(RING_RADIUS, RING_RADIUS * 1.2, t);
+        let r = mix(RING_RADIUS, RING_RADIUS * 1.44, t);
         let pos = dir * r;
 
         let corrected_pos = vec2(
@@ -181,7 +181,7 @@ fn vs_main(
 
         var color = get_event_color(event_type);
         let fade_in = smoothstep(0.0, 0.1, t);
-        let fade_out = 1.0 - smoothstep(0.9, 1.0, t);
+        let fade_out = 1.0 - smoothstep(0.6, 1.0, t);
         color.a *= fade_in * fade_out;
         out.color = color;
         return out;
@@ -253,6 +253,8 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    var alpha = in.color.a;
+
     // Radial particles use quad_uv for circle shape; directed trails have quad_uv = (0,0)
     let is_circle = (in.quad_uv.x != 0.0 || in.quad_uv.y != 0.0);
     if is_circle {
@@ -260,9 +262,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if dist_sq > 1.0 {
             discard;
         }
+        // Soft antialiased edge
+        alpha *= 1.0 - smoothstep(0.6, 1.0, dist_sq);
     }
-    if in.color.a <= 0.01 {
+
+    if alpha <= 0.01 {
         discard;
     }
-    return in.color;
+    // Premultiply alpha to match egui's compositing pipeline
+    return vec4<f32>(in.color.rgb * alpha, alpha);
 }

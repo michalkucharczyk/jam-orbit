@@ -128,8 +128,14 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Discard outside unit circle for round particles
     let dist_sq = dot(in.quad_uv, in.quad_uv);
-    if dist_sq > 1.0 || in.color.a <= 0.01 {
+    if dist_sq > 1.0 {
         discard;
     }
-    return in.color;
+    // Soft antialiased edge
+    let alpha = in.color.a * (1.0 - smoothstep(0.6, 1.0, dist_sq));
+    if alpha <= 0.01 {
+        discard;
+    }
+    // Premultiply alpha to match egui's compositing pipeline
+    return vec4<f32>(in.color.rgb * alpha, alpha);
 }
