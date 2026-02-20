@@ -2,11 +2,15 @@
 
 use crate::ws_state::WsState;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
+
+/// Shared message buffer — WS callback pushes, app drains in update()
+pub type MessageBuffer = Rc<RefCell<VecDeque<String>>>;
 
 /// WASM WebSocket client
 pub struct WsClient {
@@ -19,13 +23,10 @@ pub struct WsClient {
 impl WsClient {
     /// Connect to a WebSocket endpoint
     ///
-    /// # Arguments
-    /// * `url` - WebSocket URL (e.g., "ws://127.0.0.1:8080/api/ws")
-    /// * `on_message` - Callback invoked for each message received
-    /// * `state` - Shared state that will be updated on connection events
+    /// Messages are buffered into `msg_buffer` for the app to drain with a time budget.
     pub fn connect(
         url: &str,
-        on_message: impl Fn(String) + 'static,
+        msg_buffer: MessageBuffer,
         state: Rc<RefCell<WsState>>,
     ) -> Result<Self, JsValue> {
         info!(url, "Connecting to WebSocket");
@@ -49,12 +50,11 @@ impl WsClient {
         ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
         on_open.forget();
 
-        // On message - invoke callback
+        // On message - push to buffer (processed in app update())
         let on_msg = Closure::wrap(Box::new(move |e: MessageEvent| {
             if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
                 let msg: String = txt.into();
-                trace!(len = msg.len(), "WebSocket message received");
-                on_message(msg);
+                msg_buffer.borrow_mut().push_back(msg);
             }
         }) as Box<dyn Fn(MessageEvent)>);
         ws.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));

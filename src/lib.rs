@@ -23,7 +23,11 @@ use app::JamApp;
 #[wasm_bindgen(start)]
 pub fn init_runtime() {
     console_error_panic_hook::set_once();
-    tracing_wasm::set_as_global_default();
+    tracing_wasm::set_as_global_default_with_config(
+        tracing_wasm::WASMLayerConfigBuilder::new()
+            .set_max_level(tracing::Level::INFO)
+            .build(),
+    );
 }
 
 /// Start the egui app. Called from JS after the user clicks Connect.

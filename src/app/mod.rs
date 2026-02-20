@@ -13,6 +13,8 @@ use tracing::info;
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
+use std::collections::VecDeque;
+#[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
 
 use crate::core::{
@@ -118,6 +120,9 @@ pub struct JamApp {
     pub(crate) active_pulses: Vec<CollapsingPulse>,
     /// Errors-only filter preset active
     pub(crate) errors_only: bool,
+    /// Buffered WebSocket messages for time-budgeted processing (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    msg_buffer: Rc<RefCell<VecDeque<String>>>,
 }
 
 // Helper macro to access data on both platforms
@@ -211,28 +216,17 @@ impl JamApp {
         }));
 
         let ws_state = Rc::new(RefCell::new(WsState::Connecting));
+        let msg_buffer: Rc<RefCell<VecDeque<String>>> =
+            Rc::new(RefCell::new(VecDeque::new()));
 
-        // Connect WebSocket with callback that updates shared data
-        let data_clone = data.clone();
+        // Connect WebSocket — messages buffered, drained in update()
         let ws_url = js_sys::eval("window.__jam_ws_url")
             .ok()
             .and_then(|v| v.as_string())
             .unwrap_or_else(|| DEFAULT_WS_URL.to_string());
         let ws_client = WsClient::connect(
             &ws_url,
-            move |msg| {
-                let now = now_seconds();
-                let mut data = data_clone.borrow_mut();
-                let d = &mut *data;
-                let mut ctx = ParserContext {
-                    time_series: &mut d.time_series,
-                    blocks: &mut d.blocks,
-                    events: &mut d.events,
-                    directed_buffer: &mut d.directed_buffer,
-                    pulse_events: &mut d.pulse_events,
-                };
-                parse_event(&msg, &mut ctx, now);
-            },
+            msg_buffer.clone(),
             ws_state.clone(),
         )
         .ok();
@@ -253,6 +247,7 @@ impl JamApp {
             prev_filter_bitfield: [u64::MAX; 4],
             active_pulses: Vec::new(),
             errors_only: false,
+            msg_buffer,
         }
     }
 
@@ -374,7 +369,7 @@ impl JamApp {
         self.errors_only = false;
     }
 
-    /// Process incoming WebSocket messages (native only)
+    /// Process incoming WebSocket messages (native)
     #[cfg(not(target_arch = "wasm32"))]
     fn process_messages(&mut self) {
         // Time-budget message processing: yield after ~12ms to maintain 60fps.
@@ -398,6 +393,30 @@ impl JamApp {
                 if Instant::now() >= deadline {
                     break;
                 }
+            }
+        }
+    }
+
+    /// Process buffered WebSocket messages (WASM)
+    #[cfg(target_arch = "wasm32")]
+    fn process_messages(&mut self) {
+        const BUDGET_MS: f64 = 12.0;
+        let deadline = js_sys::Date::now() + BUDGET_MS;
+        let mut buf = self.msg_buffer.borrow_mut();
+        let mut data = self.data.borrow_mut();
+        let d = &mut *data;
+        while let Some(msg) = buf.pop_front() {
+            let now = now_seconds();
+            let mut ctx = ParserContext {
+                time_series: &mut d.time_series,
+                blocks: &mut d.blocks,
+                events: &mut d.events,
+                directed_buffer: &mut d.directed_buffer,
+                pulse_events: &mut d.pulse_events,
+            };
+            parse_event(&msg, &mut ctx, now);
+            if js_sys::Date::now() >= deadline {
+                break;
             }
         }
     }
@@ -495,8 +514,7 @@ impl eframe::App for JamApp {
         // Request continuous repaint for real-time updates
         ctx.request_repaint();
 
-        // Process WebSocket messages (native only - WASM uses callbacks)
-        #[cfg(not(target_arch = "wasm32"))]
+        // Process WebSocket messages (time-budgeted on both platforms)
         self.process_messages();
 
         // Periodic stats log (~1s)
