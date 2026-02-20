@@ -142,19 +142,15 @@ macro_rules! with_data {
 }
 pub(crate) use with_data;
 
-/// Load Red Hat Text + Overpass Mono to match jamtart-ui fonts.
+/// Load Overpass Mono as the single font for all UI text.
 fn load_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "RedHatText".into(),
-        egui::FontData::from_static(include_bytes!("../../assets/fonts/RedHatText.ttf")).into(),
-    );
     fonts.font_data.insert(
         "OverpassMono".into(),
         egui::FontData::from_static(include_bytes!("../../assets/fonts/OverpassMono.ttf")).into(),
     );
     if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-        family.insert(0, "RedHatText".into());
+        family.insert(0, "OverpassMono".into());
     }
     if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
         family.insert(0, "OverpassMono".into());
@@ -454,12 +450,12 @@ impl JamApp {
 
     /// Draw event category color legend overlay
     pub(crate) fn draw_legend(&self, painter: &egui::Painter, rect: egui::Rect) {
-        let swatch_size = 8.0;
-        let row_height = 14.0;
-        let padding = 6.0;
-        let font = egui::FontId::monospace(10.0);
+        let swatch_size = 10.0;
+        let row_height = 18.0;
+        let padding = 8.0;
+        let font = egui::FontId::monospace(13.0);
         let num_rows = EVENT_CATEGORIES.len() as f32;
-        let legend_width = 150.0;
+        let legend_width = 190.0;
         let legend_height = num_rows * row_height + padding * 2.0;
 
         // Position: bottom-left with margin
