@@ -94,7 +94,7 @@ pub struct JamApp {
     /// Toggle event selector panel visibility
     pub(crate) show_event_selector: bool,
     /// Currently selected category index in the filter panel
-    pub(crate) selected_category: usize,
+    pub(crate) expanded_category: Option<usize>,
     /// Toggle legend overlay visibility
     pub(crate) show_legend: bool,
     /// Currently active tab
@@ -234,7 +234,7 @@ impl JamApp {
             fps_counter: header::FpsCounter::new(),
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
-            selected_category: 0,
+            expanded_category: None,
             show_legend: true,
             active_tab: ActiveTab::default(),
             use_cpu,
@@ -316,7 +316,7 @@ impl JamApp {
             fps_counter: header::FpsCounter::new(),
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
-            selected_category: 0,
+            expanded_category: None,
             show_legend: true,
             active_tab: ActiveTab::default(),
             use_cpu,
@@ -576,6 +576,11 @@ impl eframe::App for JamApp {
         let now_f32 = now as f32;
         self.active_pulses.retain(|p| now_f32 - p.birth_time < PULSE_DURATION);
 
+        // Filter sidebar (must be shown before CentralPanel)
+        if self.show_event_selector {
+            self.render_event_selector(ctx);
+        }
+
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(colors::BG_PRIMARY))
             .show(ctx, |ui| {
@@ -588,11 +593,6 @@ impl eframe::App for JamApp {
                     ActiveTab::Graphs => self.render_graphs_tab(ui),
                 }
             });
-
-        // Filter modal window
-        if self.show_event_selector {
-            self.render_event_selector(ctx);
-        }
 
         // Update scatter texture reference after callback has rendered
         if let Some(texture_id) = self.scatter_texture_id {
