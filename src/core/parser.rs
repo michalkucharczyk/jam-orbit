@@ -8,7 +8,7 @@ use super::{BestBlockData, Event, EventStore, TimeSeriesData, GuaranteeQueueData
 use super::events::EventType;
 use crate::vring::{DirectedEventBuffer, DirectedParticleInstance, PulseEvent};
 use serde_json::Value;
-use tracing::{debug, info, trace, warn};
+use tracing::{trace, warn};
 
 /// Mutable references to all data stores updated during event parsing.
 ///
@@ -75,7 +75,7 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
     match event.event_type() {
         EventType::Authoring | EventType::WorkPackageSubmission => {
             if let Some(node_index) = ctx.events.node_index(node_id) {
-                info!(
+                trace!(
                     event_type = ?event.event_type(),
                     node_id = &node_id[..8],
                     node_index,
@@ -106,7 +106,7 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
                 let et = event.event_type() as u8;
                 // Log WP-related directed events (90-113) for debugging
                 if (90..=113).contains(&et) {
-                    info!(
+                    trace!(
                         event_type = et,
                         event_name = crate::core::events::event_name(et),
                         emitter = &node_id[..8],
@@ -162,22 +162,22 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
     // Special handling for specific event types
     match &event {
         Event::Status { num_peers, num_guarantees, num_shards, shards_size, .. } => {
-            debug!(node_id, num_peers, "Status event");
+            trace!(node_id, num_peers, "Status event");
             ctx.time_series.push(node_id, *num_peers as f32);
             ctx.guarantee_queue.update(node_id, num_guarantees.clone());
             ctx.shard_metrics.shard_counts.push(node_id, *num_shards as f32);
             ctx.shard_metrics.shard_sizes.push(node_id, *shards_size as f32);
         }
         Event::BestBlockChanged { slot, .. } => {
-            debug!(node_id, slot, "BestBlockChanged event");
+            trace!(node_id, slot, "BestBlockChanged event");
             ctx.blocks.set_best(node_id, *slot as u64);
         }
         Event::FinalizedBlockChanged { slot, .. } => {
-            debug!(node_id, slot, "FinalizedBlockChanged event");
+            trace!(node_id, slot, "FinalizedBlockChanged event");
             ctx.blocks.set_finalized(node_id, *slot as u64);
         }
         Event::SyncStatusChanged { synced, .. } => {
-            debug!(node_id, synced, "SyncStatusChanged event");
+            trace!(node_id, synced, "SyncStatusChanged event");
             ctx.sync_status.set(node_id, *synced, now);
         }
         _ => {

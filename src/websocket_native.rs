@@ -97,6 +97,7 @@ impl NativeWsClient {
             }
         }
 
+        warn!("WebSocket stream ended");
         *state.lock() = WsState::Disconnected;
     }
 }

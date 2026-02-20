@@ -4,7 +4,7 @@
 //! between the CLI and dashboard.
 
 use std::collections::{HashMap, VecDeque};
-use tracing::{debug, trace};
+use tracing::trace;
 
 use super::events::{Event, GuaranteeDiscardReason};
 
@@ -32,7 +32,7 @@ impl TimeSeriesData {
         let (idx, is_new) = self.get_or_create_index(node_id);
 
         if is_new {
-            debug!(node_id, idx, "New validator registered for time series");
+            trace!(node_id, idx, "New validator registered for time series");
         }
 
         let series = &mut self.series[idx];
@@ -98,7 +98,7 @@ impl BestBlockData {
         let (idx, is_new) = self.get_or_create_index(node_id);
 
         if is_new {
-            debug!(node_id, idx, "New validator registered for blocks");
+            trace!(node_id, idx, "New validator registered for blocks");
         }
 
         let prev = self.best_blocks[idx];
@@ -236,7 +236,7 @@ impl EventStore {
         let node = self.nodes.entry(node_id.to_string()).or_insert_with(|| {
             let idx = *next_idx;
             *next_idx = next_idx.saturating_add(1);
-            debug!(node_id, idx, "New node registered for events");
+            trace!(node_id, idx, "New node registered for events");
             NodeEvents::new(idx, max_events)
         });
 

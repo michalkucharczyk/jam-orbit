@@ -35,7 +35,7 @@ impl JamApp {
 
         let now = now_seconds() as f32;
 
-        let (particle_count, num_nodes, new_particles, new_cursor) = {
+        let (particle_max, active_count, num_nodes, new_particles, new_cursor) = {
             let data = &self.data;
             let (particles, cursor, skip) =
                 data.directed_buffer.get_new_since(self.gpu_upload_cursor);
@@ -43,7 +43,8 @@ impl JamApp {
                 particles.iter().skip(skip).map(GpuParticle::from).collect();
             let new_cursor = cursor;
             (
-                data.directed_buffer.len(),
+                data.directed_buffer.capacity(),
+                data.directed_buffer.active_count(now, 5.0),
                 data.events.node_count().max(1),
                 gpu_particles,
                 new_cursor,
@@ -51,8 +52,10 @@ impl JamApp {
         };
         self.gpu_upload_cursor = new_cursor;
 
+        self.stats_uploaded += new_particles.len() as u64;
+
         // Stats header
-        self.render_ring_stats(ui, num_nodes, particle_count);
+        self.render_ring_stats(ui, num_nodes, active_count, particle_max);
 
         // Allocate canvas
         let available = ui.available_size();
@@ -71,7 +74,7 @@ impl JamApp {
         );
         let num_dots = num_nodes.min(256);
         for i in 0..num_dots {
-            let angle = (i as f32 / num_nodes_f) * 2.0 * PI - PI * 0.5;
+            let angle = (i as f32 / num_dots as f32) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * pixel_radius;
             painter.circle_filled(
                 pos,
@@ -115,30 +118,18 @@ impl JamApp {
         let now = now_seconds() as f32;
         let max_age = 5.0_f32;
 
-        let (particle_count, num_nodes, active_particles) =
+        let (particle_max, num_nodes, active_particles) =
             with_data!(self, |data| {
                 let particles = data.directed_buffer.get_active_particles(now, max_age);
                 (
-                    data.directed_buffer.len(),
+                    data.directed_buffer.capacity(),
                     data.events.node_count().max(1),
                     particles,
                 )
             });
 
         // Stats header
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} nodes / {} particles ({} active)",
-                    num_nodes,
-                    particle_count,
-                    active_particles.len()
-                ))
-                .color(colors::TEXT_MUTED)
-                .monospace()
-                .size(14.0),
-            );
-        });
+        self.render_ring_stats(ui, num_nodes, active_particles.len(), particle_max);
 
         // Allocate canvas
         let available = ui.available_size();
@@ -159,7 +150,7 @@ impl JamApp {
         // Draw node dots
         let num_dots = num_nodes.min(256);
         for i in 0..num_dots {
-            let angle = (i as f32 / num_nodes_f) * 2.0 * PI - PI * 0.5;
+            let angle = (i as f32 / num_dots as f32) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
             painter.circle_filled(
                 pos,
@@ -259,12 +250,12 @@ impl JamApp {
         }
     }
 
-    fn render_ring_stats(&self, ui: &mut egui::Ui, node_count: usize, particle_count: usize) {
+    fn render_ring_stats(&self, ui: &mut egui::Ui, node_count: usize, particle_count: usize, particle_max: usize) {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!(
-                    "{} nodes / {} particles",
-                    node_count, particle_count
+                    "{} nodes / {} of max: {} particles",
+                    node_count, particle_count, particle_max
                 ))
                 .color(colors::TEXT_MUTED)
                 .monospace()

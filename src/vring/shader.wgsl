@@ -133,7 +133,9 @@ fn vs_main(
     let age = uniforms.current_time - birth_time;
     let is_directed = source_index != target_index;
 
-    // Check event type filter bitfield (early out)
+    // Check event type filter bitfield (early out).
+    // NOTE: This is largely unused — filtering happens on CPU side in push()
+    // before particles reach GPU. Kept as safety net.
     let et = u32(event_type);
     let vec_idx = et / 128u;
     let comp_idx = (et % 128u) / 32u;

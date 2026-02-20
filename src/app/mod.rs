@@ -11,6 +11,7 @@ mod consensus;
 mod errors;
 
 use eframe::egui;
+use tracing::info;
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
@@ -41,8 +42,8 @@ use crate::scatter::ScatterRenderer;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::vring::RingRenderer;
 
-/// Default WebSocket URL for jamtart
-pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:8080/api/ws";
+/// Default WebSocket URL for jamtart (override with JAMTART_WS env var)
+pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:38080/api/ws";
 
 /// Active tab in the visualization
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -116,6 +117,17 @@ pub struct JamApp {
     /// Off-screen texture for GPU scatter renderer (None in CPU mode)
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) scatter_texture_id: Option<egui::TextureId>,
+    /// Previous filter bitfield for change detection
+    prev_filter_bitfield: [u64; 4],
+    /// Stats: messages received since last log
+    #[cfg(not(target_arch = "wasm32"))]
+    stats_msg_count: u64,
+    /// Stats: particles uploaded since last log
+    #[cfg(not(target_arch = "wasm32"))]
+    stats_uploaded: u64,
+    /// Stats: last log timestamp
+    #[cfg(not(target_arch = "wasm32"))]
+    stats_last_log: f64,
     /// Active collapsing-pulse animations on the ring
     pub(crate) active_pulses: Vec<CollapsingPulse>,
 }
@@ -163,8 +175,12 @@ impl JamApp {
 
         // Connect WebSocket with callback that updates shared data
         let data_clone = data.clone();
+        let ws_url = js_sys::eval("new URLSearchParams(window.location.search).get('ws_url')")
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_else(|| DEFAULT_WS_URL.to_string());
         let ws_client = WsClient::connect(
-            DEFAULT_WS_URL,
+            &ws_url,
             move |msg| {
                 let now = now_seconds();
                 let mut data = data_clone.borrow_mut();
@@ -195,6 +211,7 @@ impl JamApp {
             selected_category: 0,
             show_legend: true,
             active_tab: ActiveTab::default(),
+            prev_filter_bitfield: [u64::MAX; 4],
             active_pulses: Vec::new(),
         }
     }
@@ -258,7 +275,9 @@ impl JamApp {
             shard_metrics: ShardMetrics::new(1024, 200),
         };
 
-        let ws_client = NativeWsClient::connect(DEFAULT_WS_URL);
+        let ws_url = std::env::var("JAMTART_WS").unwrap_or_else(|_| DEFAULT_WS_URL.to_string());
+        info!(url = %ws_url, env_set = std::env::var("JAMTART_WS").is_ok(), "WebSocket URL resolved");
+        let ws_client = NativeWsClient::connect(&ws_url);
         let ws_state = ws_client.state.clone();
 
         Self {
@@ -274,6 +293,10 @@ impl JamApp {
             use_cpu,
             gpu_upload_cursor: 0,
             scatter_texture_id,
+            prev_filter_bitfield: [u64::MAX; 4],
+            stats_msg_count: 0,
+            stats_uploaded: 0,
+            stats_last_log: 0.0,
             active_pulses: Vec::new(),
         }
     }
@@ -306,6 +329,7 @@ impl JamApp {
         let deadline = Instant::now() + BUDGET;
         if let Some(ref client) = self.ws_client {
             while let Ok(msg) = client.rx.try_recv() {
+                self.stats_msg_count += 1;
                 let now = now_seconds();
                 let d = &mut self.data;
                 let mut ctx = ParserContext {
@@ -348,7 +372,7 @@ impl JamApp {
             60..=68 => egui::Color32::from_rgb(200, 100, 255), // Block dist - purple
             80..=84 => egui::Color32::from_rgb(255, 100, 100), // Tickets - red
             90..=104 => egui::Color32::from_rgb(100, 255, 200), // Work Package - cyan
-            105..=113 => egui::Color32::from_rgb(50, 200, 180), // Guaranteeing - teal
+            105..=113 => egui::Color32::from_rgb(255, 100, 200), // Guaranteeing - magenta
             120..=131 => egui::Color32::from_rgb(255, 255, 100), // Availability - yellow
             140..=153 => egui::Color32::from_rgb(255, 150, 150), // Bundle - pink
             160..=178 => egui::Color32::from_rgb(150, 200, 255), // Segment - light blue
@@ -504,8 +528,29 @@ impl eframe::App for JamApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.process_messages();
 
-        // Prune old events periodically
+        // Periodic stats log (~1s)
         let now = now_seconds();
+        #[cfg(not(target_arch = "wasm32"))]
+        if now - self.stats_last_log >= 1.0 {
+            let active = self.data.directed_buffer.active_count(now as f32, 5.0);
+            let buffer_len = self.data.directed_buffer.len();
+            let nodes = self.data.events.node_count();
+            let enabled = self.prev_filter_bitfield.iter().map(|w| w.count_ones()).sum::<u32>();
+            info!(
+                ws_events_per_sec = self.stats_msg_count,
+                gpu_uploaded_per_sec = self.stats_uploaded,
+                active_particles = active,
+                buffer_len,
+                nodes,
+                enabled_types = enabled,
+                "stats"
+            );
+            self.stats_msg_count = 0;
+            self.stats_uploaded = 0;
+            self.stats_last_log = now;
+        }
+
+        // Prune old events periodically
         #[cfg(target_arch = "wasm32")]
         self.data.borrow_mut().events.prune(now);
         #[cfg(not(target_arch = "wasm32"))]
@@ -513,6 +558,15 @@ impl eframe::App for JamApp {
 
         // Sync event filter to directed buffer for ring visualization
         let filter = self.build_filter_bitfield();
+        if filter != self.prev_filter_bitfield {
+            let enabled = filter.iter().map(|w| w.count_ones()).sum::<u32>();
+            info!(
+                enabled_types = enabled,
+                bitfield = ?filter,
+                "filter changed"
+            );
+            self.prev_filter_bitfield = filter;
+        }
         #[cfg(target_arch = "wasm32")]
         self.data.borrow_mut().directed_buffer.set_enabled_types(filter);
         #[cfg(not(target_arch = "wasm32"))]

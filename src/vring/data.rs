@@ -166,7 +166,7 @@ pub struct DirectedEventBuffer {
 
 impl Default for DirectedEventBuffer {
     fn default() -> Self {
-        Self::new(100_000)
+        Self::new(5_000_000)
     }
 }
 
@@ -174,16 +174,21 @@ impl DirectedEventBuffer {
     /// Create a new buffer with specified capacity
     pub fn new(capacity: usize) -> Self {
         Self {
-            particles: VecDeque::with_capacity(capacity.min(100_000)),
+            particles: VecDeque::with_capacity(capacity.min(5_000_000)),
             capacity,
             enabled_types: [u64::MAX; 4], // All enabled by default
             total_pushed: 0,
         }
     }
 
-    /// Push a new particle, evicting oldest if at capacity
+    /// Push a new particle, evicting oldest if at capacity.
+    /// Disabled event types are dropped here — particle lifetimes are short (~5s)
+    /// so we don't need to store them for historical replay when re-enabling filters.
     #[inline]
     pub fn push(&mut self, particle: DirectedParticleInstance) {
+        if !self.is_type_enabled(particle.event_type as u8) {
+            return;
+        }
         if self.particles.len() >= self.capacity {
             self.particles.pop_front();
         }
@@ -237,17 +242,24 @@ impl DirectedEventBuffer {
         self.enabled_types = enabled;
     }
 
-    /// Get active particles within time window, filtered by enabled types.
-    /// Returns particles suitable for GPU upload.
+    /// Get active particles within time window.
+    /// Event type filtering already happens in `push()`, so only time-based filtering here.
     pub fn get_active_particles(&self, now: f32, max_age: f32) -> Vec<DirectedParticleInstance> {
         let cutoff = now - max_age;
         self.particles
             .iter()
-            .filter(|p| {
-                p.birth_time >= cutoff && self.is_type_enabled(p.event_type as u8)
-            })
+            .filter(|p| p.birth_time >= cutoff)
             .copied()
             .collect()
+    }
+
+    /// Count active particles within time window (no allocation)
+    pub fn active_count(&self, now: f32, max_age: f32) -> usize {
+        let cutoff = now - max_age;
+        self.particles
+            .iter()
+            .filter(|p| p.birth_time >= cutoff)
+            .count()
     }
 
     /// Get all particles (unfiltered) for debugging
@@ -259,6 +271,11 @@ impl DirectedEventBuffer {
     /// Number of particles in buffer
     pub fn len(&self) -> usize {
         self.particles.len()
+    }
+
+    /// Maximum capacity of buffer
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Check if buffer is empty
@@ -330,10 +347,15 @@ mod tests {
         let active = buffer.get_active_particles(3.5, 2.0);
         assert_eq!(active.len(), 2); // p3 and p4 (birth_time >= 1.5)
 
-        // Disable event type 106
+        // Disable event type 106 — new pushes of type 106 are dropped
         buffer.set_type_enabled(106, false);
+        let p5 = DirectedParticleInstance::new(4, 5, 3.5, 1.0, 106, 0.1);
+        buffer.push(p5); // dropped because type 106 is disabled
+        assert_eq!(buffer.len(), 3); // still 3 (p5 was filtered out)
+
+        // Already-buffered type 106 particles remain (filtering is at push time)
         let active = buffer.get_active_particles(3.5, 2.0);
-        assert_eq!(active.len(), 1); // Only p3 (type 131)
+        assert_eq!(active.len(), 2); // p3 and p4 still present
     }
 
     #[test]

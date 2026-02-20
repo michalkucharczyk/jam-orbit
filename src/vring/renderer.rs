@@ -78,7 +78,7 @@ impl Default for ColorLut {
                 [0.8, 0.4, 1.0, 0.8],   // 4: Block dist - purple
                 [1.0, 0.4, 0.4, 0.8],   // 5: Tickets - red
                 [0.4, 1.0, 0.8, 0.8],   // 6: Work Package - cyan
-                [0.2, 0.8, 0.7, 0.8],   // 7: Guaranteeing - teal
+                [1.0, 0.4, 0.8, 0.8],   // 7: Guaranteeing - magenta
                 [1.0, 1.0, 0.4, 0.8],   // 8: Availability - yellow
                 [1.0, 0.6, 0.6, 0.8],   // 9: Bundle - pink
                 [0.6, 0.8, 1.0, 0.8],   // 10: Segment - light blue
@@ -369,6 +369,7 @@ impl RingRenderer {
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
         queue.write_buffer(&self.filter_buffer, 0, bytemuck::bytes_of(filter));
+
     }
 
     pub fn pipeline(&self) -> &wgpu::RenderPipeline {

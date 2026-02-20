@@ -1290,7 +1290,7 @@ pub fn event_color_rgb(event_type: u8) -> (u8, u8, u8) {
         60..=68 => (200, 100, 255), // Block dist - purple
         80..=84 => (255, 100, 100), // Tickets - red
         90..=104 => (100, 255, 200), // Work Package - cyan
-        105..=113 => (50, 200, 180), // Guaranteeing - teal
+        105..=113 => (255, 100, 200), // Guaranteeing - magenta
         120..=131 => (255, 255, 100), // Availability - yellow
         140..=153 => (255, 150, 150), // Bundle - pink
         160..=178 => (150, 200, 255), // Segment - light blue
@@ -1554,7 +1554,7 @@ mod tests {
         assert_eq!(event_color_rgb(0), (128, 128, 128));   // Meta gray
         assert_eq!(event_color_rgb(10), (100, 200, 100));  // Status green
         assert_eq!(event_color_rgb(20), (100, 150, 255));  // Connection blue
-        assert_eq!(event_color_rgb(106), (50, 200, 180));  // Guaranteeing teal
+        assert_eq!(event_color_rgb(106), (255, 100, 200));  // Guaranteeing magenta
         assert_eq!(event_color_rgb(250), (255, 255, 255)); // Unknown white
     }
 
