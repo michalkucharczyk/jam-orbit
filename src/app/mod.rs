@@ -5,10 +5,7 @@
 mod header;
 mod filter;
 mod ring;
-mod pipeline;
-mod network;
-mod consensus;
-mod errors;
+mod graphs;
 
 use eframe::egui;
 use tracing::info;
@@ -20,7 +17,7 @@ use std::rc::Rc;
 
 use crate::core::{
     parse_event, ParserContext, BestBlockData, EventStore, TimeSeriesData,
-    EVENT_CATEGORIES, GuaranteeQueueData, SyncStatusData, ShardMetrics,
+    EVENT_CATEGORIES,
 };
 use crate::theme::{colors, minimal_visuals};
 use crate::time::now_seconds;
@@ -50,10 +47,7 @@ pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:38080/api/ws";
 pub enum ActiveTab {
     #[default]
     Ring,
-    Pipeline,
-    Network,
-    Consensus,
-    Errors,
+    Graphs,
 }
 
 /// An active collapsing-pulse animation on the ring.
@@ -70,9 +64,6 @@ pub struct SharedData {
     pub events: EventStore,
     pub directed_buffer: DirectedEventBuffer,
     pub pulse_events: Vec<PulseEvent>,
-    pub guarantee_queue: GuaranteeQueueData,
-    pub sync_status: SyncStatusData,
-    pub shard_metrics: ShardMetrics,
 }
 
 /// JAM Visualization App - runs on both native and WASM
@@ -166,9 +157,6 @@ impl JamApp {
             events: EventStore::new(50000, 60.0),
             directed_buffer: DirectedEventBuffer::default(),
             pulse_events: Vec::new(),
-            guarantee_queue: GuaranteeQueueData::new(1024),
-            sync_status: SyncStatusData::new(1024),
-            shard_metrics: ShardMetrics::new(1024, 200),
         }));
 
         let ws_state = Rc::new(RefCell::new(WsState::Connecting));
@@ -191,9 +179,6 @@ impl JamApp {
                     events: &mut d.events,
                     directed_buffer: &mut d.directed_buffer,
                     pulse_events: &mut d.pulse_events,
-                    guarantee_queue: &mut d.guarantee_queue,
-                    sync_status: &mut d.sync_status,
-                    shard_metrics: &mut d.shard_metrics,
                 };
                 parse_event(&msg, &mut ctx, now);
             },
@@ -270,9 +255,6 @@ impl JamApp {
             events: EventStore::new(50000, 60.0),
             directed_buffer: DirectedEventBuffer::default(),
             pulse_events: Vec::new(),
-            guarantee_queue: GuaranteeQueueData::new(1024),
-            sync_status: SyncStatusData::new(1024),
-            shard_metrics: ShardMetrics::new(1024, 200),
         };
 
         let ws_url = std::env::var("JAMTART_WS").unwrap_or_else(|_| DEFAULT_WS_URL.to_string());
@@ -338,9 +320,6 @@ impl JamApp {
                     events: &mut d.events,
                     directed_buffer: &mut d.directed_buffer,
                     pulse_events: &mut d.pulse_events,
-                    guarantee_queue: &mut d.guarantee_queue,
-                    sync_status: &mut d.sync_status,
-                    shard_metrics: &mut d.shard_metrics,
                 };
                 parse_event(&msg, &mut ctx, now);
                 if Instant::now() >= deadline {
@@ -435,87 +414,6 @@ impl JamApp {
         }
     }
 
-    /// Render a rate graph for specific event types (reusable helper).
-    /// Returns per-node rates for the given event types.
-    pub(crate) fn compute_filtered_rates(&self, event_types: &[u8]) -> Vec<(u16, Vec<u32>)> {
-        let now = now_seconds();
-        let mut filter = vec![false; 200];
-        for &et in event_types {
-            if (et as usize) < filter.len() {
-                filter[et as usize] = true;
-            }
-        }
-        with_data!(self, |data| {
-            data.events.compute_rates_per_node(now, 1.0, 60, &filter)
-        })
-    }
-
-    /// Paint a title overlay at the top-left inside a plot rect
-    pub(crate) fn paint_plot_title(ui: &egui::Ui, rect: egui::Rect, title: &str, color: egui::Color32) {
-        ui.painter().text(
-            rect.left_top() + egui::vec2(4.0, 2.0),
-            egui::Align2::LEFT_TOP,
-            title,
-            egui::FontId::proportional(13.0),
-            color,
-        );
-    }
-
-    /// Render a standard per-node rate plot (transparent white lines)
-    pub(crate) fn render_rate_plot(&self, ui: &mut egui::Ui, id: &str, title: &str, event_types: &[u8]) {
-        use egui_plot::{Line, Plot, PlotPoints};
-
-        let rates = self.compute_filtered_rates(event_types);
-
-        let max_y = rates.iter()
-            .flat_map(|(_, r)| r.iter())
-            .copied()
-            .max()
-            .unwrap_or(0) as f64;
-
-        let resp = Plot::new(id)
-            .show_axes([false, true])
-            .show_grid(false)
-            .allow_zoom(false)
-            .allow_drag(false)
-            .allow_scroll(false)
-            .show_background(false)
-            .include_x(0.0)
-            .include_x(60.0)
-            .include_y(0.0)
-            .include_y((max_y + 1.0).max(2.0))
-            .y_axis_formatter(|mark, _| {
-                if (mark.value - mark.value.round()).abs() < 0.01 {
-                    format!("{:.0}", mark.value)
-                } else {
-                    String::new()
-                }
-            })
-            .label_formatter(|_name, value| {
-                format!("t=-{:.0}s rate={:.0}/s", 60.0 - value.x, value.y)
-            })
-            .show(ui, |plot_ui| {
-                let num_nodes = rates.len().max(1);
-                let alpha = (255.0_f32 / num_nodes as f32).clamp(10.0, 200.0) as u8;
-
-                for (_node_idx, node_rates) in rates.iter() {
-                    if node_rates.len() < 2 {
-                        continue;
-                    }
-
-                    let line_points: Vec<[f64; 2]> = node_rates
-                        .iter()
-                        .enumerate()
-                        .map(|(x, &count)| [x as f64, count as f64])
-                        .collect();
-
-                    let color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
-                    plot_ui.line(Line::new(PlotPoints::from(line_points)).color(color).width(1.0));
-                }
-            });
-
-        Self::paint_plot_title(ui, resp.response.rect, title, colors::TEXT_MUTED);
-    }
 }
 
 impl eframe::App for JamApp {
@@ -599,11 +497,8 @@ impl eframe::App for JamApp {
                 ui.add_space(8.0);
 
                 match self.active_tab {
-                    ActiveTab::Pipeline => self.render_pipeline_tab(ui),
-                    ActiveTab::Network => self.render_network_tab(ui),
-                    ActiveTab::Consensus => self.render_consensus_tab(ui),
-                    ActiveTab::Errors => self.render_errors_tab(ui),
                     ActiveTab::Ring => self.render_ring_tab(ui),
+                    ActiveTab::Graphs => self.render_graphs_tab(ui),
                 }
             });
 

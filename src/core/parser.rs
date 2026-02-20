@@ -4,19 +4,13 @@
 //! Special handling for Status, BestBlockChanged, FinalizedBlockChanged.
 //! Directed events populate the vring visualization buffers.
 
-use super::{BestBlockData, Event, EventStore, TimeSeriesData, GuaranteeQueueData, SyncStatusData, ShardMetrics};
+use super::{BestBlockData, Event, EventStore, TimeSeriesData};
 use super::events::EventType;
 use crate::vring::{DirectedEventBuffer, DirectedParticleInstance, PulseEvent};
 use serde_json::Value;
 use tracing::{trace, warn};
 
 /// Mutable references to all data stores updated during event parsing.
-///
-/// Groups the visualization and telemetry state that [`parse_event`] writes to,
-/// replacing what was previously 8 separate `&mut` parameters. Each incoming
-/// WebSocket message may touch one or more of these stores depending on
-/// the event type (e.g. a `Status` event updates `time_series`, `events`,
-/// `guarantee_queue`, `sync_status`, and `shard_metrics`).
 ///
 /// Construct from [`SharedData`](crate::app::SharedData) fields at the call
 /// site and pass to `parse_event(msg, &mut ctx, now)`.
@@ -31,12 +25,6 @@ pub struct ParserContext<'a> {
     pub directed_buffer: &'a mut DirectedEventBuffer,
     /// Collapsing pulse overlay events (Authoring, WorkPackageSubmission).
     pub pulse_events: &'a mut Vec<PulseEvent>,
-    /// Per-node guarantee queue depth, used in Pipeline tab.
-    pub guarantee_queue: &'a mut GuaranteeQueueData,
-    /// Per-node sync status (synced / not synced).
-    pub sync_status: &'a mut SyncStatusData,
-    /// Per-node shard distribution counts and sizes.
-    pub shard_metrics: &'a mut ShardMetrics,
 }
 
 /// Parse a WebSocket message and update data structures.
@@ -161,12 +149,9 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
 
     // Special handling for specific event types
     match &event {
-        Event::Status { num_peers, num_guarantees, num_shards, shards_size, .. } => {
+        Event::Status { num_peers, .. } => {
             trace!(node_id, num_peers, "Status event");
             ctx.time_series.push(node_id, *num_peers as f32);
-            ctx.guarantee_queue.update(node_id, num_guarantees.clone());
-            ctx.shard_metrics.shard_counts.push(node_id, *num_shards as f32);
-            ctx.shard_metrics.shard_sizes.push(node_id, *shards_size as f32);
         }
         Event::BestBlockChanged { slot, .. } => {
             trace!(node_id, slot, "BestBlockChanged event");
@@ -176,9 +161,8 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
             trace!(node_id, slot, "FinalizedBlockChanged event");
             ctx.blocks.set_finalized(node_id, *slot as u64);
         }
-        Event::SyncStatusChanged { synced, .. } => {
-            trace!(node_id, synced, "SyncStatusChanged event");
-            ctx.sync_status.set(node_id, *synced, now);
+        Event::SyncStatusChanged { .. } => {
+            // Stored in EventStore, no special handling needed
         }
         _ => {
             // Other events stored but not specially handled
@@ -193,16 +177,13 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
 mod tests {
     use super::*;
 
-    fn make_test_ctx() -> (TimeSeriesData, BestBlockData, EventStore, DirectedEventBuffer, Vec<PulseEvent>, GuaranteeQueueData, SyncStatusData, ShardMetrics) {
+    fn make_test_ctx() -> (TimeSeriesData, BestBlockData, EventStore, DirectedEventBuffer, Vec<PulseEvent>) {
         (
             TimeSeriesData::new(10, 100),
             BestBlockData::new(10),
             EventStore::new(100, 60.0),
             DirectedEventBuffer::default(),
             Vec::new(),
-            GuaranteeQueueData::new(10),
-            SyncStatusData::new(10),
-            ShardMetrics::new(10, 100),
         )
     }
 
@@ -210,23 +191,20 @@ mod tests {
     /// Stores must be declared as `let (mut ts, mut blocks, ...)` and this
     /// macro borrows them all mutably into a ParserContext.
     macro_rules! ctx {
-        ($ts:expr, $blocks:expr, $events:expr, $db:expr, $pe:expr, $gq:expr, $ss:expr, $sm:expr) => {
+        ($ts:expr, $blocks:expr, $events:expr, $db:expr, $pe:expr) => {
             ParserContext {
                 time_series: &mut $ts,
                 blocks: &mut $blocks,
                 events: &mut $events,
                 directed_buffer: &mut $db,
                 pulse_events: &mut $pe,
-                guarantee_queue: &mut $gq,
-                sync_status: &mut $ss,
-                shard_metrics: &mut $sm,
             }
         };
     }
 
     #[test]
     fn test_parse_status_event() {
-        let (mut ts, mut blocks, mut events, mut db, mut pe, mut gq, mut ss, mut sm) = make_test_ctx();
+        let (mut ts, mut blocks, mut events, mut db, mut pe) = make_test_ctx();
 
         let msg = r#"{
             "type": "event",
@@ -249,7 +227,7 @@ mod tests {
             }
         }"#;
 
-        let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe, gq, ss, sm), 0.0);
+        let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe), 0.0);
         assert!(result.is_some());
         assert_eq!(ts.validator_count(), 1);
         assert_eq!(events.node_count(), 1);
@@ -257,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_parse_best_block_event() {
-        let (mut ts, mut blocks, mut events, mut db, mut pe, mut gq, mut ss, mut sm) = make_test_ctx();
+        let (mut ts, mut blocks, mut events, mut db, mut pe) = make_test_ctx();
 
         let msg = r#"{
             "type": "event",
@@ -274,7 +252,7 @@ mod tests {
             }
         }"#;
 
-        let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe, gq, ss, sm), 0.0);
+        let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe), 0.0);
         assert!(result.is_some());
         assert_eq!(blocks.highest_slot(), Some(5662737));
         assert_eq!(events.node_count(), 1);
@@ -282,17 +260,17 @@ mod tests {
 
     #[test]
     fn test_ignore_non_event() {
-        let (mut ts, mut blocks, mut events, mut db, mut pe, mut gq, mut ss, mut sm) = make_test_ctx();
+        let (mut ts, mut blocks, mut events, mut db, mut pe) = make_test_ctx();
 
         let msg = r#"{"type": "connected", "data": {"message": "hello"}}"#;
 
-        let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe, gq, ss, sm), 0.0);
+        let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe), 0.0);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_parse_directed_event() {
-        let (mut ts, mut blocks, mut events, mut db, mut pe, mut gq, mut ss, mut sm) = make_test_ctx();
+        let (mut ts, mut blocks, mut events, mut db, mut pe) = make_test_ctx();
 
         // The recipient peer_id [1,2,3,...,32] hex-encodes to this node_id.
         // We must pre-register this node in EventStore so the parser can resolve it.
@@ -312,7 +290,7 @@ mod tests {
                 "node_id": "{}"
             }}
         }}"#, recipient_node_id);
-        parse_event(&dummy_msg, &mut ctx!(ts, blocks, events, db, pe, gq, ss, sm), 0.0);
+        parse_event(&dummy_msg, &mut ctx!(ts, blocks, events, db, pe), 0.0);
 
         // SendingGuarantee is a directed event (outbound to recipient peer)
         let msg = r#"{
@@ -330,7 +308,7 @@ mod tests {
             }
         }"#;
 
-        let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe, gq, ss, sm), 1.5);
+        let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe), 1.5);
         assert!(result.is_some());
 
         // 2 particles: 1 radial from dummy Status + 1 directed from SendingGuarantee
