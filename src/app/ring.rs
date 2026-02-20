@@ -5,14 +5,11 @@ use crate::theme::colors;
 use crate::time::now_seconds;
 use super::{JamApp, with_data};
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::vring::{FilterBitfield, GpuParticle, RingCallback, Uniforms};
 
 impl JamApp {
-    /// Render the Ring tab — routes to GPU or CPU path (native)
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Render the Ring tab — routes to GPU or CPU path.
     pub(crate) fn render_ring_tab(&mut self, ui: &mut egui::Ui) {
         if self.use_cpu {
             self.render_ring_tab_cpu(ui);
@@ -21,38 +18,31 @@ impl JamApp {
         }
     }
 
-    /// Render the Ring tab — always CPU on WASM
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn render_ring_tab(&mut self, ui: &mut egui::Ui) {
-        self.render_ring_tab_cpu(ui);
-    }
-
-    /// GPU ring rendering path (native only).
+    /// GPU ring rendering path.
     /// Particles rendered by GPU shader, overlays (ring, dots, legend) drawn by CPU.
-    #[cfg(not(target_arch = "wasm32"))]
     fn render_ring_tab_gpu(&mut self, ui: &mut egui::Ui) {
         use std::f32::consts::PI;
 
         let now = now_seconds() as f32;
 
-        let (particle_max, active_count, num_nodes, new_particles, new_cursor) = {
-            let data = &self.data;
-            let (particles, cursor, skip) =
-                data.directed_buffer.get_new_since(self.gpu_upload_cursor);
-            let gpu_particles: Vec<GpuParticle> =
-                particles.iter().skip(skip).map(GpuParticle::from).collect();
-            let new_cursor = cursor;
-            (
-                data.directed_buffer.capacity(),
-                data.directed_buffer.active_count(now, 5.0),
-                data.events.node_count().max(1),
-                gpu_particles,
-                new_cursor,
-            )
-        };
+        let (particle_max, active_count, num_nodes, new_particles, new_cursor) =
+            with_data!(self, |data| {
+                let (particles, cursor, skip) =
+                    data.directed_buffer.get_new_since(self.gpu_upload_cursor);
+                let gpu_particles: Vec<GpuParticle> =
+                    particles.iter().skip(skip).map(GpuParticle::from).collect();
+                (
+                    data.directed_buffer.capacity(),
+                    data.directed_buffer.active_count(now, 5.0),
+                    data.events.node_count().max(1),
+                    gpu_particles,
+                    cursor,
+                )
+            });
         self.gpu_upload_cursor = new_cursor;
 
-        self.stats_uploaded += new_particles.len() as u64;
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.stats_uploaded += new_particles.len() as u64; }
 
         // Stats header
         self.render_ring_stats(ui, num_nodes, active_count, particle_max);

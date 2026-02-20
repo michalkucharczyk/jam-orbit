@@ -27,17 +27,15 @@ use crate::ws_state::WsState;
 #[cfg(target_arch = "wasm32")]
 use crate::websocket_wasm::WsClient;
 
+use std::sync::Arc;
+
+use crate::scatter::ScatterRenderer;
+use crate::vring::RingRenderer;
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::websocket_native::NativeWsClient;
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
 use parking_lot::Mutex;
-
-#[cfg(not(target_arch = "wasm32"))]
-use crate::scatter::ScatterRenderer;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::vring::RingRenderer;
 
 /// Default WebSocket URL for jamtart (override with JAMTART_WS env var)
 pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:38080/api/ws";
@@ -99,14 +97,11 @@ pub struct JamApp {
     pub(crate) show_legend: bool,
     /// Currently active tab
     pub(crate) active_tab: ActiveTab,
-    /// Use CPU rendering for all visualizations (--use-cpu flag, native only)
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Use CPU rendering (--use-cpu on native, fallback if no wgpu on WASM)
     pub(crate) use_cpu: bool,
     /// Cursor for incremental GPU particle upload
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) gpu_upload_cursor: u64,
     /// Off-screen texture for GPU scatter renderer (None in CPU mode)
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) scatter_texture_id: Option<egui::TextureId>,
     /// Previous filter bitfield for change detection
     prev_filter_bitfield: [u64; 4],
@@ -174,6 +169,39 @@ impl JamApp {
         }
         cc.egui_ctx.set_style(style);
 
+        // Register GPU renderers (wgpu backend on WASM via WebGPU)
+        let (scatter_texture_id, use_cpu) =
+            if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+                let device = &render_state.device;
+                let format = render_state.target_format;
+
+                let ring_renderer = RingRenderer::new(device, format);
+                render_state
+                    .renderer
+                    .write()
+                    .callback_resources
+                    .insert(ring_renderer);
+
+                let scatter_renderer = ScatterRenderer::new(device, format);
+                let texture_id = {
+                    let mut egui_renderer = render_state.renderer.write();
+                    egui_renderer.register_native_texture(
+                        device,
+                        &scatter_renderer.create_view(),
+                        egui_wgpu::wgpu::FilterMode::Linear,
+                    )
+                };
+                render_state
+                    .renderer
+                    .write()
+                    .callback_resources
+                    .insert(scatter_renderer);
+
+                (Some(texture_id), false)
+            } else {
+                (None, true) // fallback to CPU if wgpu unavailable
+            };
+
         let data = Rc::new(RefCell::new(SharedData {
             time_series: TimeSeriesData::new(1024, 200),
             blocks: BestBlockData::new(1024),
@@ -219,6 +247,9 @@ impl JamApp {
             selected_category: 0,
             show_legend: true,
             active_tab: ActiveTab::default(),
+            use_cpu,
+            gpu_upload_cursor: 0,
+            scatter_texture_id,
             prev_filter_bitfield: [u64::MAX; 4],
             active_pulses: Vec::new(),
             errors_only: false,
@@ -550,7 +581,6 @@ impl eframe::App for JamApp {
         }
 
         // Update scatter texture reference after callback has rendered
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(texture_id) = self.scatter_texture_id {
             if let Some(wgpu_render_state) = frame.wgpu_render_state() {
                 let mut egui_renderer = wgpu_render_state.renderer.write();

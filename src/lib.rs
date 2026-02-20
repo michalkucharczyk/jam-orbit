@@ -29,7 +29,20 @@ pub fn init_runtime() {
 /// Start the egui app. Called from JS after the user clicks Connect.
 #[wasm_bindgen]
 pub fn start() {
-    let web_options = eframe::WebOptions::default();
+    let web_options = eframe::WebOptions {
+        wgpu_options: egui_wgpu::WgpuConfiguration {
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
+                instance_descriptor: egui_wgpu::wgpu::InstanceDescriptor {
+                    backends: egui_wgpu::wgpu::Backends::BROWSER_WEBGPU
+                        | egui_wgpu::wgpu::Backends::GL,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
     wasm_bindgen_futures::spawn_local(async {
         let canvas = web_sys::window()

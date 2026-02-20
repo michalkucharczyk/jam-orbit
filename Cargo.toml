@@ -21,9 +21,12 @@ hex = "0.4"
 
 # WASM target dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-eframe = { version = "0.31", default-features = false, features = ["glow", "web_screen_reader"] }
+eframe = { version = "0.31", default-features = false, features = ["wgpu", "web_screen_reader"] }
 egui = "0.31"
+egui-wgpu = "0.31"
 egui_plot = "0.31"
+bytemuck = { version = "1", features = ["derive"] }
+wgpu = { version = "24", features = ["webgl"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [

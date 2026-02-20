@@ -6,11 +6,8 @@ use crate::theme::colors;
 use crate::time::now_seconds;
 use super::{JamApp, with_data};
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::vring::FilterBitfield;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::scatter::{ScatterCallback, ScatterParticle, ScatterUniforms};
 
 impl JamApp {
@@ -215,8 +212,7 @@ impl JamApp {
             });
     }
 
-    /// Render Event Particles — routes to GPU or CPU path (native)
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Render Event Particles — routes to GPU or CPU path.
     fn render_particle_trails(&self, ui: &mut egui::Ui) {
         if self.scatter_texture_id.is_some() && !self.use_cpu {
             self.render_particle_trails_gpu(ui);
@@ -225,14 +221,7 @@ impl JamApp {
         }
     }
 
-    /// Render Event Particles — always CPU on WASM
-    #[cfg(target_arch = "wasm32")]
-    fn render_particle_trails(&self, ui: &mut egui::Ui) {
-        self.render_particle_trails_cpu(ui);
-    }
-
-    /// GPU scatter rendering path (native only)
-    #[cfg(not(target_arch = "wasm32"))]
+    /// GPU scatter rendering path.
     fn render_particle_trails_gpu(&self, ui: &mut egui::Ui) {
         ui.label(
             egui::RichText::new("Event Particles")
@@ -245,8 +234,7 @@ impl JamApp {
         let cutoff = now - max_age;
 
         // Collect scatter particles from EventStore
-        let (new_particles, node_count) = {
-            let data = &self.data;
+        let (new_particles, node_count) = with_data!(self, |data| {
             let mut particles = Vec::new();
             for (_, node) in data.events.nodes() {
                 for (&event_type, events) in &node.by_type {
@@ -268,7 +256,7 @@ impl JamApp {
                 }
             }
             (particles, data.events.node_count().max(1) as f32)
-        };
+        });
 
         // Allocate canvas area
         let available = ui.available_size();
