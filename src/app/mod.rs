@@ -121,6 +121,8 @@ pub struct JamApp {
     stats_last_log: f64,
     /// Active collapsing-pulse animations on the ring
     pub(crate) active_pulses: Vec<CollapsingPulse>,
+    /// Errors-only filter preset active
+    pub(crate) errors_only: bool,
 }
 
 // Helper macro to access data on both platforms
@@ -198,6 +200,7 @@ impl JamApp {
             active_tab: ActiveTab::default(),
             prev_filter_bitfield: [u64::MAX; 4],
             active_pulses: Vec::new(),
+            errors_only: false,
         }
     }
 
@@ -280,6 +283,7 @@ impl JamApp {
             stats_uploaded: 0,
             stats_last_log: 0.0,
             active_pulses: Vec::new(),
+            errors_only: false,
         }
     }
 
@@ -299,6 +303,22 @@ impl JamApp {
             }
         }
         bitfield
+    }
+
+    /// Apply errors-only filter preset: enable only error/failure events.
+    pub(crate) fn apply_errors_filter(&mut self) {
+        use crate::core::events::ERROR_EVENT_TYPES;
+        self.selected_events.fill(false);
+        for &et in ERROR_EVENT_TYPES {
+            self.selected_events[et as usize] = true;
+        }
+        self.errors_only = true;
+    }
+
+    /// Restore all events and clear errors-only mode.
+    pub(crate) fn apply_all_filter(&mut self) {
+        self.selected_events.fill(true);
+        self.errors_only = false;
     }
 
     /// Process incoming WebSocket messages (native only)

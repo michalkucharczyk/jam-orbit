@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use crate::core::{event_color_rgb, event_name, EVENT_CATEGORIES};
+use crate::core::events::ERROR_EVENT_TYPES;
 use crate::theme::colors;
 use super::JamApp;
 
@@ -21,13 +22,20 @@ impl JamApp {
                         .button(egui::RichText::new("All").size(16.0))
                         .clicked()
                     {
-                        self.selected_events.fill(true);
+                        self.apply_all_filter();
                     }
                     if ui
                         .button(egui::RichText::new("None").size(16.0))
                         .clicked()
                     {
                         self.selected_events.fill(false);
+                        self.errors_only = false;
+                    }
+                    if ui
+                        .button(egui::RichText::new("Errors").size(16.0))
+                        .clicked()
+                    {
+                        self.apply_errors_filter();
                     }
                 });
 
@@ -150,6 +158,18 @@ impl JamApp {
                                 {
                                     for &et in category.event_types {
                                         self.selected_events[et as usize] = false;
+                                    }
+                                }
+                                // Only show Errors button if this category has error events
+                                let has_errors = category.event_types.iter().any(|et| ERROR_EVENT_TYPES.contains(et));
+                                if has_errors {
+                                    if ui
+                                        .button(egui::RichText::new("Errors").size(14.0))
+                                        .clicked()
+                                    {
+                                        for &et in category.event_types {
+                                            self.selected_events[et as usize] = ERROR_EVENT_TYPES.contains(&et);
+                                        }
                                     }
                                 }
                             });

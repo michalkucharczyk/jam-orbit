@@ -1156,6 +1156,52 @@ pub const EVENT_CATEGORIES: &[EventCategory] = &[
     },
 ];
 
+/// Event types representing errors, failures, disconnections, and discards.
+pub const ERROR_EVENT_TYPES: &[u8] = &[
+    // Meta
+    0,   // Dropped
+    // Connection
+    20,  // ConnectionRefused
+    22,  // ConnectInFailed
+    25,  // ConnectOutFailed
+    27,  // Disconnected
+    28,  // PeerMisbehaved
+    // Block Auth/Import
+    41,  // AuthoringFailed
+    44,  // BlockVerificationFailed
+    46,  // BlockExecutionFailed
+    // Block Distribution
+    61,  // BlockAnnouncementStreamClosed
+    65,  // BlockRequestFailed
+    // Safrole Tickets
+    81,  // TicketGenerationFailed
+    83,  // TicketTransferFailed
+    // Work Package
+    92,  // WorkPackageFailed
+    93,  // DuplicateWorkPackage
+    99,  // WorkPackageSharingFailed
+    // Guaranteeing
+    107, // GuaranteeSendFailed
+    111, // GuaranteeReceiveFailed
+    113, // GuaranteeDiscarded
+    // Availability
+    122, // ShardRequestFailed
+    127, // AssuranceSendFailed
+    130, // AssuranceReceiveFailed
+    // Bundle Recovery
+    142, // BundleShardRequestFailed
+    150, // BundleRequestFailed
+    // Segment Recovery
+    164, // SegmentShardRequestFailed
+    169, // SegmentReconstructionFailed
+    171, // SegmentVerificationFailed
+    175, // SegmentRequestFailed
+    // Preimages
+    190, // PreimageAnnouncementFailed
+    195, // PreimageRequestFailed
+    199, // PreimageDiscarded
+];
+
 /// Get the human-readable name for an event type
 #[allow(dead_code)]
 pub fn event_name(event_type: u8) -> &'static str {

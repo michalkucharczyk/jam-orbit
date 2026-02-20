@@ -117,6 +117,22 @@ impl JamApp {
                     self.show_event_selector = !self.show_event_selector;
                 }
 
+                let errors_text = if self.errors_only {
+                    "Errors *"
+                } else {
+                    "Errors o"
+                };
+                if ui
+                    .button(egui::RichText::new(errors_text))
+                    .clicked()
+                {
+                    if self.errors_only {
+                        self.apply_all_filter();
+                    } else {
+                        self.apply_errors_filter();
+                    }
+                }
+
                 let legend_text = if self.show_legend {
                     "Legend *"
                 } else {
