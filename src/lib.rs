@@ -18,11 +18,17 @@ mod ws_state;
 
 use app::JamApp;
 
+/// Called once from JS to set up panic hook and tracing.
+/// The WASM module is loaded eagerly but the app is NOT started until `start()`.
 #[wasm_bindgen(start)]
-pub fn main() {
+pub fn init_runtime() {
     console_error_panic_hook::set_once();
     tracing_wasm::set_as_global_default();
+}
 
+/// Start the egui app. Called from JS after the user clicks Connect.
+#[wasm_bindgen]
+pub fn start() {
     let web_options = eframe::WebOptions::default();
 
     wasm_bindgen_futures::spawn_local(async {

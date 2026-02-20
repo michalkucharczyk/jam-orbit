@@ -142,11 +142,32 @@ macro_rules! with_data {
 }
 pub(crate) use with_data;
 
+/// Load Red Hat Text + Overpass Mono to match jamtart-ui fonts.
+fn load_custom_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "RedHatText".into(),
+        egui::FontData::from_static(include_bytes!("../../assets/fonts/RedHatText.ttf")).into(),
+    );
+    fonts.font_data.insert(
+        "OverpassMono".into(),
+        egui::FontData::from_static(include_bytes!("../../assets/fonts/OverpassMono.ttf")).into(),
+    );
+    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        family.insert(0, "RedHatText".into());
+    }
+    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+        family.insert(0, "OverpassMono".into());
+    }
+    ctx.set_fonts(fonts);
+}
+
 impl JamApp {
     /// Create new app for WASM platform
     #[cfg(target_arch = "wasm32")]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(minimal_visuals());
+        load_custom_fonts(&cc.egui_ctx);
         let mut style = (*cc.egui_ctx.style()).clone();
         for (_text_style, font_id) in style.text_styles.iter_mut() {
             font_id.size *= 1.5;
@@ -165,7 +186,7 @@ impl JamApp {
 
         // Connect WebSocket with callback that updates shared data
         let data_clone = data.clone();
-        let ws_url = js_sys::eval("new URLSearchParams(window.location.search).get('ws_url')")
+        let ws_url = js_sys::eval("window.__jam_ws_url")
             .ok()
             .and_then(|v| v.as_string())
             .unwrap_or_else(|| DEFAULT_WS_URL.to_string());
@@ -208,6 +229,7 @@ impl JamApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(cc: &eframe::CreationContext<'_>, use_cpu: bool) -> Self {
         cc.egui_ctx.set_visuals(minimal_visuals());
+        load_custom_fonts(&cc.egui_ctx);
         let mut style = (*cc.egui_ctx.style()).clone();
         for (_text_style, font_id) in style.text_styles.iter_mut() {
             font_id.size *= 1.5;

@@ -8,6 +8,11 @@
     <!-- Favicon - white circle on black -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23000' width='100' height='100'/><circle cx='50' cy='50' r='30' fill='%23FFF'/></svg>">
 
+    <!-- Google Fonts for overlay UI -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Red+Hat+Text:wght@400;500;700&family=Overpass+Mono:wght@300;400&display=swap" rel="stylesheet">
+
     <style>
         /* === Minimal Black & White === */
         *, *::before, *::after {
@@ -22,7 +27,7 @@
             overflow: hidden;
             background: #000;
             color: #FFF;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: 'Red Hat Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 
         #canvas {
@@ -30,6 +35,72 @@
             height: 100%;
             display: block;
             touch-action: none;
+        }
+
+        /* === Connect overlay === */
+        #connect-overlay {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            z-index: 2000;
+            transition: opacity 0.2s;
+        }
+
+        #connect-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #connect-overlay label {
+            font-size: 11px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: #505050;
+            margin-bottom: 10px;
+        }
+
+        #ws-url {
+            width: 340px;
+            padding: 10px 14px;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 4px;
+            color: #FFF;
+            font-family: 'Overpass Mono', monospace;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        #ws-url:focus {
+            border-color: #888;
+        }
+
+        #connect-btn {
+            margin-top: 16px;
+            padding: 8px 32px;
+            background: #FFF;
+            color: #000;
+            border: none;
+            border-radius: 4px;
+            font-family: 'Red Hat Text', sans-serif;
+            font-size: 13px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        #connect-btn:hover {
+            background: #DDD;
+        }
+
+        #connect-btn:active {
+            background: #BBB;
         }
 
         /* === Loading - minimal === */
@@ -91,7 +162,15 @@
     </style>
 </head>
 <body>
-    <div class="loading" id="loading">
+    <!-- Connect overlay - shown first -->
+    <div id="connect-overlay">
+        <label for="ws-url">WebSocket URL</label>
+        <input type="text" id="ws-url" spellcheck="false" autocomplete="off">
+        <button id="connect-btn">Connect</button>
+    </div>
+
+    <!-- Loading spinner - shown while WASM loads -->
+    <div class="loading hidden" id="loading">
         <div class="loading-spinner"></div>
         <div class="loading-text">Loading</div>
     </div>
@@ -99,21 +178,74 @@
     <canvas id="canvas"></canvas>
 
     <script type="module">
-        import init from './pkg/jam_vis_poc.js';
+        import init, { start } from './pkg/jam_vis_poc.js';
 
-        init()
-            .then(() => {
-                document.getElementById('loading').classList.add('hidden');
-            })
-            .catch((error) => {
-                console.error('Failed to load WASM:', error);
-                document.getElementById('loading').innerHTML = `
-                    <div class="error">
-                        <h1>Failed to load</h1>
-                        <p>${error.message || 'WebGPU/WebGL2 required'}</p>
-                    </div>
-                `;
-            });
+        const DEFAULT_URL = 'ws://127.0.0.1:38080/api/ws';
+        const STORAGE_KEY = 'jam_ws_url';
+
+        const overlay = document.getElementById('connect-overlay');
+        const loading = document.getElementById('loading');
+        const urlInput = document.getElementById('ws-url');
+        const connectBtn = document.getElementById('connect-btn');
+
+        // Restore last-used URL
+        urlInput.value = localStorage.getItem(STORAGE_KEY) || DEFAULT_URL;
+
+        // Pre-load WASM module (init_runtime runs, but app doesn't start)
+        let wasmReady = false;
+        init().then(() => { wasmReady = true; }).catch(console.error);
+
+        function connect() {
+            const url = urlInput.value.trim();
+            if (!url) return;
+
+            // Persist and expose to WASM
+            localStorage.setItem(STORAGE_KEY, url);
+            window.__jam_ws_url = url;
+
+            // Transition: overlay → loading → canvas
+            overlay.classList.add('hidden');
+            loading.classList.remove('hidden');
+
+            function launch() {
+                try {
+                    start();
+                    loading.classList.add('hidden');
+                } catch (error) {
+                    console.error('Failed to start app:', error);
+                    loading.innerHTML = `
+                        <div class="error">
+                            <h1>Failed to load</h1>
+                            <p>${error.message || 'WebGPU/WebGL2 required'}</p>
+                        </div>
+                    `;
+                }
+            }
+
+            if (wasmReady) {
+                launch();
+            } else {
+                // WASM still loading — wait for it
+                init().then(launch).catch((error) => {
+                    console.error('Failed to load WASM:', error);
+                    loading.innerHTML = `
+                        <div class="error">
+                            <h1>Failed to load</h1>
+                            <p>${error.message || 'WebGPU/WebGL2 required'}</p>
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        connectBtn.addEventListener('click', connect);
+        urlInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') connect();
+        });
+
+        // Focus the input
+        urlInput.focus();
+        urlInput.select();
     </script>
 </body>
 </html>
