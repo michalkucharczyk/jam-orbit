@@ -20,24 +20,18 @@ impl JamApp {
         });
 
         ui.horizontal(|ui| {
-            // LEFT: Control buttons
-            let legend_text = if self.show_legend { "Legend *" } else { "Legend o" };
-            if ui.button(egui::RichText::new(legend_text)).clicked() {
-                self.show_legend = !self.show_legend;
-            }
-
-            let errors_text = if self.errors_only { "Errors *" } else { "Errors o" };
-            if ui.button(egui::RichText::new(errors_text)).clicked() {
-                if self.errors_only {
-                    self.apply_all_filter();
-                } else {
-                    self.apply_errors_filter();
-                }
-            }
-
-            let filter_text = if self.show_event_selector { "Filter ^" } else { "Filter v" };
+            // LEFT: Control buttons — Filter first
+            let filter_text = if self.show_event_selector { "Filter <<<" } else { "Filter >>>" };
             if ui.button(egui::RichText::new(filter_text)).clicked() {
                 self.show_event_selector = !self.show_event_selector;
+            }
+
+            // Legend button: hidden when filter sidebar is open
+            if !self.show_event_selector {
+                let legend_text = if self.show_legend { "Legend *" } else { "Legend o" };
+                if ui.button(egui::RichText::new(legend_text)).clicked() {
+                    self.show_legend = !self.show_legend;
+                }
             }
 
             ui.add_space(10.0);
@@ -66,8 +60,18 @@ impl JamApp {
                 }
             }
 
-            // RIGHT: Status and stats
+            // RIGHT: Status and stats (right-to-left order)
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.particle_max > 0 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}/{} particles", self.particle_count, self.particle_max
+                        ))
+                        .color(colors::TEXT_MUTED),
+                    );
+                    ui.label(egui::RichText::new("/").color(colors::TEXT_MUTED));
+                }
+
                 ui.label(
                     egui::RichText::new(format!("{} nodes", event_count))
                         .color(colors::TEXT_MUTED),

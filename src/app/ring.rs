@@ -1,7 +1,6 @@
 //! Validators ring visualization
 
 use eframe::egui;
-use crate::theme::colors;
 use crate::time::now_seconds;
 use super::{JamApp, with_data};
 
@@ -44,8 +43,9 @@ impl JamApp {
         #[cfg(not(target_arch = "wasm32"))]
         { self.stats_uploaded += new_particles.len() as u64; }
 
-        // Stats header
-        self.render_ring_stats(ui, num_nodes, active_count, particle_max);
+        // Update particle stats for header display
+        self.particle_count = active_count;
+        self.particle_max = particle_max;
 
         // Allocate canvas
         let available = ui.available_size();
@@ -96,13 +96,13 @@ impl JamApp {
         ));
 
         // Draw color legend (CPU overlay)
-        if self.show_legend {
+        if self.show_legend && !self.show_event_selector {
             self.draw_legend(&painter, rect);
         }
     }
 
     /// CPU ring rendering path (WASM + native --use-cpu fallback)
-    fn render_ring_tab_cpu(&self, ui: &mut egui::Ui) {
+    fn render_ring_tab_cpu(&mut self, ui: &mut egui::Ui) {
         use std::f32::consts::PI;
 
         let now = now_seconds() as f32;
@@ -118,8 +118,9 @@ impl JamApp {
                 )
             });
 
-        // Stats header
-        self.render_ring_stats(ui, num_nodes, active_particles.len(), particle_max);
+        // Update particle stats for header display
+        self.particle_count = active_particles.len();
+        self.particle_max = particle_max;
 
         // Allocate canvas
         let available = ui.available_size();
@@ -235,24 +236,11 @@ impl JamApp {
         self.draw_pulses(&painter, center, radius, num_nodes_f, now);
 
         // Draw color legend
-        if self.show_legend {
+        if self.show_legend && !self.show_event_selector {
             self.draw_legend(&painter, rect);
         }
     }
 
-    fn render_ring_stats(&self, ui: &mut egui::Ui, node_count: usize, particle_count: usize, particle_max: usize) {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} nodes / {} of max: {} particles",
-                    node_count, particle_count, particle_max
-                ))
-                .color(colors::TEXT_MUTED)
-                .monospace()
-                .size(14.0),
-            );
-        });
-    }
 
     /// Draw collapsing pulse circles as CPU overlay on the ring.
     pub(crate) fn draw_pulses(

@@ -52,7 +52,7 @@ impl JamApp {
         });
 
         // Draw legend overlay on graphs tab
-        if self.show_legend {
+        if self.show_legend && !self.show_event_selector {
             let panel_rect = ui.min_rect();
             self.draw_legend(ui.painter(), panel_rect);
         }

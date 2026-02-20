@@ -103,6 +103,32 @@
             background: #BBB;
         }
 
+        #url-list {
+            margin-top: 20px;
+            width: 340px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .url-item {
+            padding: 6px 12px;
+            background: transparent;
+            border: 1px solid #222;
+            border-radius: 3px;
+            color: #707070;
+            font-family: 'Overpass Mono', monospace;
+            font-size: 12px;
+            cursor: pointer;
+            text-align: left;
+            transition: color 0.1s, border-color 0.1s;
+        }
+
+        .url-item:hover {
+            color: #FFF;
+            border-color: #555;
+        }
+
         /* === Loading - minimal === */
         .loading {
             position: fixed;
@@ -167,6 +193,7 @@
         <label for="ws-url">WebSocket URL</label>
         <input type="text" id="ws-url" spellcheck="false" autocomplete="off">
         <button id="connect-btn">Connect</button>
+        <div id="url-list"></div>
     </div>
 
     <!-- Loading spinner - shown while WASM loads -->
@@ -180,16 +207,61 @@
     <script type="module">
         import init, { start } from './pkg/jam_vis_poc.js';
 
-        const DEFAULT_URL = 'ws://127.0.0.1:38080/api/ws';
+        const DEFAULT_URL = 'wss://jamtoaster.network/api/ws';
+        const BUILTIN_URLS = [
+            'wss://jamtoaster.network/api/ws',
+            'ws://127.0.0.1:38080/api/ws',
+            'ws://127.0.0.1:8080/api/ws',
+        ];
         const STORAGE_KEY = 'jam_ws_url';
+        const HISTORY_KEY = 'jam_ws_history';
+        const MAX_HISTORY = 10;
 
         const overlay = document.getElementById('connect-overlay');
         const loading = document.getElementById('loading');
         const urlInput = document.getElementById('ws-url');
         const connectBtn = document.getElementById('connect-btn');
+        const urlList = document.getElementById('url-list');
+
+        function getHistory() {
+            try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; }
+            catch { return []; }
+        }
+
+        function addToHistory(url) {
+            let history = getHistory().filter(u => u !== url);
+            history.unshift(url);
+            if (history.length > MAX_HISTORY) history = history.slice(0, MAX_HISTORY);
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+        }
+
+        function renderUrlList() {
+            // Merge: recent history first, then builtins not already in history
+            const history = getHistory();
+            const all = [...history];
+            for (const url of BUILTIN_URLS) {
+                if (!all.includes(url)) all.push(url);
+            }
+            urlList.innerHTML = '';
+            for (const url of all) {
+                const btn = document.createElement('button');
+                btn.className = 'url-item';
+                btn.textContent = url;
+                btn.addEventListener('click', () => {
+                    urlInput.value = url;
+                    urlInput.focus();
+                });
+                btn.addEventListener('dblclick', () => {
+                    urlInput.value = url;
+                    connect();
+                });
+                urlList.appendChild(btn);
+            }
+        }
 
         // Restore last-used URL
         urlInput.value = localStorage.getItem(STORAGE_KEY) || DEFAULT_URL;
+        renderUrlList();
 
         // Pre-load WASM module (init_runtime runs, but app doesn't start)
         let wasmReady = false;
@@ -201,6 +273,7 @@
 
             // Persist and expose to WASM
             localStorage.setItem(STORAGE_KEY, url);
+            addToHistory(url);
             window.__jam_ws_url = url;
 
             // Transition: overlay → loading → canvas

@@ -196,15 +196,16 @@ impl JamApp {
                                     dot_color,
                                 );
 
-                                // Category name + count (clickable to expand)
+                                // Category name + count + arrow (single clickable element)
                                 let text_color = if none_selected {
                                     colors::TEXT_MUTED
                                 } else {
                                     colors::TEXT_SECONDARY
                                 };
+                                let arrow = if is_expanded { "▾" } else { "▸" };
                                 let label_text = format!(
-                                    "{} ({}/{})",
-                                    category.name, selected_count, total
+                                    "{} ({}/{}) {}",
+                                    category.name, selected_count, total, arrow
                                 );
                                 let label = ui.selectable_label(
                                     is_expanded,
@@ -213,12 +214,6 @@ impl JamApp {
                                 if label.clicked() {
                                     new_expanded = if is_expanded { None } else { Some(cat_idx) };
                                 }
-
-                                // Expand arrow
-                                let arrow = if is_expanded { "▾" } else { "▸" };
-                                ui.label(
-                                    egui::RichText::new(arrow).color(colors::TEXT_MUTED),
-                                );
                             });
 
                             // ── Expanded events ──

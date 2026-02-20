@@ -1104,10 +1104,6 @@ pub struct EventCategory {
 #[allow(dead_code)]
 pub const EVENT_CATEGORIES: &[EventCategory] = &[
     EventCategory {
-        name: "Meta",
-        event_types: &[0],
-    },
-    EventCategory {
         name: "Status",
         event_types: &[10, 11, 12, 13],
     },
@@ -1153,6 +1149,10 @@ pub const EVENT_CATEGORIES: &[EventCategory] = &[
     EventCategory {
         name: "Preimages",
         event_types: &[190, 191, 192, 193, 194, 195, 196, 197, 198, 199],
+    },
+    EventCategory {
+        name: "Meta",
+        event_types: &[0],
     },
 ];
 

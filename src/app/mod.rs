@@ -120,6 +120,10 @@ pub struct JamApp {
     pub(crate) active_pulses: Vec<CollapsingPulse>,
     /// Errors-only filter preset active
     pub(crate) errors_only: bool,
+    /// Last known particle count (for header display)
+    pub(crate) particle_count: usize,
+    /// Last known particle capacity (for header display)
+    pub(crate) particle_max: usize,
     /// Buffered WebSocket messages for time-budgeted processing (WASM only)
     #[cfg(target_arch = "wasm32")]
     msg_buffer: Rc<RefCell<VecDeque<String>>>,
@@ -164,11 +168,6 @@ impl JamApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(minimal_visuals());
         load_custom_fonts(&cc.egui_ctx);
-        let mut style = (*cc.egui_ctx.style()).clone();
-        for (_text_style, font_id) in style.text_styles.iter_mut() {
-            font_id.size *= 1.5;
-        }
-        cc.egui_ctx.set_style(style);
 
         // Register GPU renderers (wgpu backend on WASM via WebGPU)
         let (scatter_texture_id, use_cpu) =
@@ -243,6 +242,8 @@ impl JamApp {
             prev_filter_bitfield: [u64::MAX; 4],
             active_pulses: Vec::new(),
             errors_only: false,
+            particle_count: 0,
+            particle_max: 0,
             msg_buffer,
         }
     }
@@ -328,6 +329,8 @@ impl JamApp {
             stats_last_log: 0.0,
             active_pulses: Vec::new(),
             errors_only: false,
+            particle_count: 0,
+            particle_max: 0,
         }
     }
 
@@ -450,12 +453,18 @@ impl JamApp {
 
     /// Draw event category color legend overlay
     pub(crate) fn draw_legend(&self, painter: &egui::Painter, rect: egui::Rect) {
-        let swatch_size = 10.0;
-        let row_height = 18.0;
-        let padding = 8.0;
-        let font = egui::FontId::monospace(13.0);
+        // Use the same font size as egui Body text (scales with the 1.5x native multiplier)
+        let body_font = painter.ctx().style().text_styles
+            .get(&egui::TextStyle::Body)
+            .cloned()
+            .unwrap_or_else(|| egui::FontId::proportional(14.0));
+        let body_size = body_font.size;
+        let font = body_font;
+        let swatch_size = body_size * 0.75;
+        let row_height = body_size * 1.4;
+        let padding = body_size * 0.6;
         let num_rows = EVENT_CATEGORIES.len() as f32;
-        let legend_width = 190.0;
+        let legend_width = body_size * 14.0;
         let legend_height = num_rows * row_height + padding * 2.0;
 
         // Position: bottom-left with margin
@@ -576,6 +585,13 @@ impl eframe::App for JamApp {
         let now_f32 = now as f32;
         self.active_pulses.retain(|p| now_f32 - p.birth_time < PULSE_DURATION);
 
+        // Header bar (TopBottomPanel spans full width, stays in place regardless of sidebar)
+        egui::TopBottomPanel::top("header")
+            .frame(egui::Frame::new().fill(colors::BG_PRIMARY).inner_margin(4.0))
+            .show(ctx, |ui| {
+                self.render_header(ui);
+            });
+
         // Filter sidebar (must be shown before CentralPanel)
         if self.show_event_selector {
             self.render_event_selector(ctx);
@@ -584,9 +600,6 @@ impl eframe::App for JamApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(colors::BG_PRIMARY))
             .show(ctx, |ui| {
-                self.render_header(ui);
-
-                ui.add_space(8.0);
 
                 match self.active_tab {
                     ActiveTab::Ring => self.render_ring_tab(ui),
