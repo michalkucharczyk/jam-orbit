@@ -16,9 +16,9 @@ struct Uniforms {
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
-// Event type color lookup table (16 categories)
+// Event type color lookup table (256 entries, indexed directly by event_type)
 @group(0) @binding(1)
-var<uniform> color_lut: array<vec4<f32>, 16>;
+var<uniform> color_lut: array<vec4<f32>, 256>;
 
 // Event type filter bitfield (256 bits = 8 x u32)
 @group(0) @binding(2)
@@ -36,40 +36,10 @@ const QUAD_POS = array<vec2<f32>, 6>(
     vec2(-1.0,  1.0), vec2( 1.0, -1.0), vec2( 1.0,  1.0),
 );
 
-// Get color for event type category (same mapping as ring shader)
+// Get color for event type — direct LUT lookup by event_type index
 fn get_event_color(event_type: f32) -> vec4<f32> {
-    var color_idx: u32 = 0u;
-    let et = u32(event_type);
-
-    if et == 0u {
-        color_idx = 0u;  // Meta - gray
-    } else if et >= 10u && et <= 13u {
-        color_idx = 1u;  // Status - green
-    } else if et >= 20u && et <= 28u {
-        color_idx = 2u;  // Connection - blue
-    } else if et >= 40u && et <= 47u {
-        color_idx = 3u;  // Block auth - orange
-    } else if et >= 60u && et <= 68u {
-        color_idx = 4u;  // Block dist - purple
-    } else if et >= 80u && et <= 84u {
-        color_idx = 5u;  // Tickets - red
-    } else if et >= 90u && et <= 104u {
-        color_idx = 6u;  // Work Package - cyan
-    } else if et >= 105u && et <= 113u {
-        color_idx = 7u;  // Guaranteeing - teal
-    } else if et >= 120u && et <= 131u {
-        color_idx = 8u;  // Availability - yellow
-    } else if et >= 140u && et <= 153u {
-        color_idx = 9u;  // Bundle - pink
-    } else if et >= 160u && et <= 178u {
-        color_idx = 10u; // Segment - light blue
-    } else if et >= 190u && et <= 199u {
-        color_idx = 11u; // Preimage - light gray
-    } else {
-        color_idx = 15u; // Unknown - white
-    }
-
-    return color_lut[color_idx];
+    let idx = clamp(u32(event_type), 0u, 255u);
+    return color_lut[idx];
 }
 
 @vertex

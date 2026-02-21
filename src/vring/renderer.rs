@@ -60,37 +60,41 @@ impl Default for Uniforms {
     }
 }
 
-/// Color lookup table for event categories
+/// Color lookup table indexed directly by event_type (0–255).
+/// CPU fills this dynamically based on filter state; GPU does a simple array lookup.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct ColorLut {
-    pub colors: [[f32; 4]; 16],
+    pub colors: [[f32; 4]; 256],
 }
 
 impl Default for ColorLut {
     fn default() -> Self {
+        // All entries default to transparent; app fills via build_color_lut()
         Self {
-            colors: [
-                [0.5, 0.5, 0.5, 0.8],   // 0: Meta - gray
-                [0.4, 0.8, 0.4, 0.8],   // 1: Status - green
-                [0.4, 0.6, 1.0, 0.8],   // 2: Connection - blue
-                [1.0, 0.8, 0.4, 0.8],   // 3: Block auth - orange
-                [0.8, 0.4, 1.0, 0.8],   // 4: Block dist - purple
-                [1.0, 0.4, 0.4, 0.8],   // 5: Tickets - red
-                [0.4, 1.0, 0.8, 0.8],   // 6: Work Package - cyan
-                [1.0, 0.4, 0.8, 0.8],   // 7: Guaranteeing - magenta
-                [1.0, 1.0, 0.4, 0.8],   // 8: Availability - yellow
-                [1.0, 0.6, 0.6, 0.8],   // 9: Bundle - pink
-                [0.6, 0.8, 1.0, 0.8],   // 10: Segment - light blue
-                [0.8, 0.8, 0.8, 0.8],   // 11: Preimage - light gray
-                [0.7, 0.7, 0.7, 0.8],   // 12: Reserved
-                [0.7, 0.7, 0.7, 0.8],   // 13: Reserved
-                [0.7, 0.7, 0.7, 0.8],   // 14: Reserved
-                [1.0, 1.0, 1.0, 0.8],   // 15: Unknown - white
-            ],
+            colors: [[0.5, 0.5, 0.5, 0.8]; 256],
         }
     }
 }
+
+/// Category colors as [f32; 4] RGBA, matching EVENT_CATEGORIES order:
+/// Status, Connection, Block Auth/Import, Block Distribution, Safrole Tickets,
+/// Work Package, Guaranteeing, Availability, Bundle Recovery, Segment Recovery,
+/// Preimages, Meta
+pub const CATEGORY_COLORS: [[f32; 4]; 12] = [
+    [0.4, 0.8, 0.4, 0.8],   // Status - green
+    [0.4, 0.6, 1.0, 0.8],   // Connection - blue
+    [1.0, 0.8, 0.4, 0.8],   // Block Auth/Import - orange
+    [0.8, 0.4, 1.0, 0.8],   // Block Distribution - purple
+    [1.0, 0.4, 0.4, 0.8],   // Safrole Tickets - red
+    [0.4, 1.0, 0.8, 0.8],   // Work Package - cyan
+    [1.0, 0.4, 0.8, 0.8],   // Guaranteeing - magenta
+    [1.0, 1.0, 0.4, 0.8],   // Availability - yellow
+    [1.0, 0.6, 0.6, 0.8],   // Bundle Recovery - pink
+    [0.6, 0.8, 1.0, 0.8],   // Segment Recovery - light blue
+    [0.8, 0.8, 0.8, 0.8],   // Preimages - light gray
+    [0.5, 0.5, 0.5, 0.8],   // Meta - gray
+];
 
 /// Event filter bitfield (256 bits = 8 x u32), matches shader's array<vec4<u32>, 2>
 #[repr(C)]
@@ -122,7 +126,6 @@ pub struct RingRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
-    #[allow(dead_code)] // Used in bind group creation
     color_lut_buffer: wgpu::Buffer,
     filter_buffer: wgpu::Buffer,
     instance_buffers: Vec<wgpu::Buffer>,
@@ -326,6 +329,7 @@ impl RingRenderer {
         new_particles: &[GpuParticle],
         uniforms: &Uniforms,
         filter: &FilterBitfield,
+        color_lut: &ColorLut,
     ) {
         // Upload new particles
         if !new_particles.is_empty() {
@@ -369,7 +373,7 @@ impl RingRenderer {
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
         queue.write_buffer(&self.filter_buffer, 0, bytemuck::bytes_of(filter));
-
+        queue.write_buffer(&self.color_lut_buffer, 0, bytemuck::bytes_of(color_lut));
     }
 
     pub fn pipeline(&self) -> &wgpu::RenderPipeline {
@@ -394,6 +398,7 @@ pub struct RingCallback {
     pub new_particles: Arc<Vec<GpuParticle>>,
     pub uniforms: Uniforms,
     pub filter: FilterBitfield,
+    pub color_lut: ColorLut,
     pub reset: bool,
 }
 
@@ -414,7 +419,7 @@ impl egui_wgpu::CallbackTrait for RingCallback {
             renderer.reset();
         }
 
-        renderer.upload_data(queue, &self.new_particles, &self.uniforms, &self.filter);
+        renderer.upload_data(queue, &self.new_particles, &self.uniforms, &self.filter, &self.color_lut);
         vec![]
     }
 

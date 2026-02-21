@@ -26,14 +26,6 @@ impl JamApp {
                 self.show_event_selector = !self.show_event_selector;
             }
 
-            // Legend button: hidden when filter sidebar is open
-            if !self.show_event_selector {
-                let legend_text = if self.show_legend { "Legend *" } else { "Legend o" };
-                if ui.button(egui::RichText::new(legend_text)).clicked() {
-                    self.show_legend = !self.show_legend;
-                }
-            }
-
             ui.add_space(10.0);
 
             // Tab buttons

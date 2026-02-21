@@ -23,7 +23,7 @@ use crate::core::{
 };
 use crate::theme::{colors, minimal_visuals};
 use crate::time::now_seconds;
-use crate::vring::{DirectedEventBuffer, PulseEvent};
+use crate::vring::{DirectedEventBuffer, PulseEvent, ColorLut, CATEGORY_COLORS};
 use crate::ws_state::WsState;
 
 #[cfg(target_arch = "wasm32")]
@@ -95,8 +95,6 @@ pub struct JamApp {
     pub(crate) show_event_selector: bool,
     /// Currently selected category index in the filter panel
     pub(crate) expanded_category: Option<usize>,
-    /// Toggle legend overlay visibility
-    pub(crate) show_legend: bool,
     /// Currently active tab
     pub(crate) active_tab: ActiveTab,
     /// Use CPU rendering (--use-cpu on native, fallback if no wgpu on WASM)
@@ -124,6 +122,8 @@ pub struct JamApp {
     pub(crate) particle_count: usize,
     /// Last known particle capacity (for header display)
     pub(crate) particle_max: usize,
+    /// Dynamic color lookup table (recomputed on filter change)
+    pub(crate) color_lut: ColorLut,
     /// Buffered WebSocket messages for time-budgeted processing (WASM only)
     #[cfg(target_arch = "wasm32")]
     msg_buffer: Rc<RefCell<VecDeque<String>>>,
@@ -234,7 +234,6 @@ impl JamApp {
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
             expanded_category: None,
-            show_legend: true,
             active_tab: ActiveTab::default(),
             use_cpu,
             gpu_upload_cursor: 0,
@@ -244,6 +243,7 @@ impl JamApp {
             errors_only: false,
             particle_count: 0,
             particle_max: 0,
+            color_lut: build_color_lut(&Self::default_selected_events()),
             msg_buffer,
         }
     }
@@ -318,7 +318,6 @@ impl JamApp {
             selected_events: Self::default_selected_events(),
             show_event_selector: false,
             expanded_category: None,
-            show_legend: true,
             active_tab: ActiveTab::default(),
             use_cpu,
             gpu_upload_cursor: 0,
@@ -331,6 +330,7 @@ impl JamApp {
             errors_only: false,
             particle_count: 0,
             particle_max: 0,
+            color_lut: build_color_lut(&Self::default_selected_events()),
         }
     }
 
@@ -432,85 +432,160 @@ impl JamApp {
         }
     }
 
-    /// Get color for event type
+    /// Get color for event type from the dynamic ColorLut
     pub(crate) fn get_event_color(&self, event_type: u8) -> egui::Color32 {
-        match event_type {
-            0 => egui::Color32::from_rgb(128, 128, 128),       // Meta - gray
-            10..=13 => egui::Color32::from_rgb(100, 200, 100), // Status - green
-            20..=28 => egui::Color32::from_rgb(100, 150, 255), // Connection - blue
-            40..=47 => egui::Color32::from_rgb(255, 200, 100), // Block auth - orange
-            60..=68 => egui::Color32::from_rgb(200, 100, 255), // Block dist - purple
-            80..=84 => egui::Color32::from_rgb(255, 100, 100), // Tickets - red
-            90..=104 => egui::Color32::from_rgb(100, 255, 200), // Work Package - cyan
-            105..=113 => egui::Color32::from_rgb(255, 100, 200), // Guaranteeing - magenta
-            120..=131 => egui::Color32::from_rgb(255, 255, 100), // Availability - yellow
-            140..=153 => egui::Color32::from_rgb(255, 150, 150), // Bundle - pink
-            160..=178 => egui::Color32::from_rgb(150, 200, 255), // Segment - light blue
-            190..=199 => egui::Color32::from_rgb(200, 200, 200), // Preimage - light gray
-            _ => egui::Color32::from_rgb(255, 255, 255),
+        let [r, g, b, a] = self.color_lut.colors[event_type as usize];
+        egui::Color32::from_rgba_unmultiplied(
+            (r * 255.0) as u8,
+            (g * 255.0) as u8,
+            (b * 255.0) as u8,
+            (a * 255.0) as u8,
+        )
+    }
+
+    /// Draw event category color legend as an auto-sized egui Window.
+    /// Single-category mode: shows individual event names with distinct colors.
+    /// Multi-category mode: shows category names with shared category colors.
+    pub(crate) fn draw_legend(&self, ctx: &egui::Context) {
+        use crate::core::event_name;
+
+        // Determine if single-category mode
+        let active_categories: Vec<usize> = EVENT_CATEGORIES.iter().enumerate()
+            .filter(|(_, cat)| cat.event_types.iter().any(|&et|
+                (et as usize) < self.selected_events.len() && self.selected_events[et as usize]
+            ))
+            .map(|(i, _)| i)
+            .collect();
+
+        let single_category = if active_categories.len() == 1 {
+            Some(active_categories[0])
+        } else {
+            None
+        };
+
+        // Build legend entries: (name, color, enabled)
+        let entries: Vec<(&str, egui::Color32, bool)> = if let Some(cat_idx) = single_category {
+            let category = &EVENT_CATEGORIES[cat_idx];
+            category.event_types.iter().map(|&et| {
+                let enabled = (et as usize) < self.selected_events.len()
+                    && self.selected_events[et as usize];
+                (event_name(et), self.get_event_color(et), enabled)
+            }).collect()
+        } else {
+            EVENT_CATEGORIES.iter().map(|cat| {
+                let enabled = cat.event_types.iter().any(|&et|
+                    (et as usize) < self.selected_events.len() && self.selected_events[et as usize]
+                );
+                (cat.name, self.get_event_color(cat.event_types[0]), enabled)
+            }).collect()
+        };
+
+        egui::Area::new(egui::Id::new("legend_area"))
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(8.0, -8.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 200))
+                    .corner_radius(4.0)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        let header = egui::CollapsingHeader::new(
+                            egui::RichText::new("Legend").color(colors::TEXT_MUTED),
+                        )
+                        .default_open(true);
+
+                        header.show(ui, |ui| {
+                            for (name, color, enabled) in &entries {
+                                let alpha = if *enabled { 200u8 } else { 40 };
+                                let swatch_color = egui::Color32::from_rgba_unmultiplied(
+                                    color.r(), color.g(), color.b(), alpha,
+                                );
+                                let text_color = egui::Color32::from_rgba_unmultiplied(160, 160, 160, alpha);
+
+                                ui.horizontal(|ui| {
+                                    let (dot_rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(10.0, 10.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().circle_filled(dot_rect.center(), 5.0, swatch_color);
+                                    ui.label(egui::RichText::new(*name).color(text_color));
+                                });
+                            }
+                        });
+                    });
+            });
+    }
+
+}
+
+/// Build a ColorLut based on current filter state.
+/// Single-category mode (only one category has any enabled events): distinct colors per event type.
+/// Multi-category mode: shared category color for all events in a category.
+fn build_color_lut(selected_events: &[bool]) -> ColorLut {
+    let active_categories: Vec<usize> = EVENT_CATEGORIES.iter().enumerate()
+        .filter(|(_, cat)| cat.event_types.iter().any(|&et|
+            (et as usize) < selected_events.len() && selected_events[et as usize]
+        ))
+        .map(|(i, _)| i)
+        .collect();
+
+    let single_category = if active_categories.len() == 1 {
+        Some(active_categories[0])
+    } else {
+        None
+    };
+
+    let mut lut = ColorLut { colors: [[0.0; 4]; 256] };
+
+    if let Some(cat_idx) = single_category {
+        // Single category: assign distinct palette colors to each enabled event
+        let category = &EVENT_CATEGORIES[cat_idx];
+        let enabled: Vec<u8> = category.event_types.iter()
+            .copied()
+            .filter(|&et| (et as usize) < selected_events.len() && selected_events[et as usize])
+            .collect();
+        let palette = generate_distinct_palette(enabled.len());
+        for (i, &et) in enabled.iter().enumerate() {
+            lut.colors[et as usize] = palette[i];
+        }
+    } else {
+        // Multi-category: each event gets its category color
+        for (cat_idx, category) in EVENT_CATEGORIES.iter().enumerate() {
+            let color = CATEGORY_COLORS[cat_idx];
+            for &et in category.event_types {
+                lut.colors[et as usize] = color;
+            }
         }
     }
 
-    /// Draw event category color legend overlay
-    pub(crate) fn draw_legend(&self, painter: &egui::Painter, rect: egui::Rect) {
-        // Use the same font size as egui Body text (scales with the 1.5x native multiplier)
-        let body_font = painter.ctx().style().text_styles
-            .get(&egui::TextStyle::Body)
-            .cloned()
-            .unwrap_or_else(|| egui::FontId::proportional(14.0));
-        let body_size = body_font.size;
-        let font = body_font;
-        let swatch_size = body_size * 0.75;
-        let row_height = body_size * 1.4;
-        let padding = body_size * 0.6;
-        let num_rows = EVENT_CATEGORIES.len() as f32;
-        let legend_width = body_size * 14.0;
-        let legend_height = num_rows * row_height + padding * 2.0;
+    lut
+}
 
-        // Position: bottom-left with margin
-        let legend_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + 8.0, rect.bottom() - legend_height - 8.0),
-            egui::vec2(legend_width, legend_height),
-        );
+/// Generate `n` evenly-spaced distinct colors using HSL.
+fn generate_distinct_palette(n: usize) -> Vec<[f32; 4]> {
+    if n == 0 { return vec![]; }
+    if n == 1 { return vec![[1.0, 1.0, 1.0, 0.8]]; }
 
-        // Dark semi-transparent background
-        painter.rect_filled(
-            legend_rect,
-            4.0,
-            egui::Color32::from_rgba_unmultiplied(20, 20, 20, 200),
-        );
+    (0..n).map(|i| {
+        let hue = i as f32 / n as f32;
+        let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.65);
+        [r, g, b, 0.8]
+    }).collect()
+}
 
-        let legend_x = legend_rect.left() + padding;
-        let mut legend_y = legend_rect.top() + padding;
-
-        for category in EVENT_CATEGORIES {
-            let color = self.get_event_color(category.event_types[0]);
-            let enabled = category
-                .event_types
-                .iter()
-                .any(|&et| (et as usize) < self.selected_events.len() && self.selected_events[et as usize]);
-
-            let alpha = if enabled { 200u8 } else { 40 };
-            let swatch_color = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
-            let text_color = egui::Color32::from_rgba_unmultiplied(160, 160, 160, alpha);
-
-            painter.circle_filled(
-                egui::pos2(legend_x + swatch_size * 0.5, legend_y + swatch_size * 0.5),
-                swatch_size * 0.5,
-                swatch_color,
-            );
-            painter.text(
-                egui::pos2(legend_x + swatch_size + 6.0, legend_y),
-                egui::Align2::LEFT_TOP,
-                category.name,
-                font.clone(),
-                text_color,
-            );
-
-            legend_y += row_height;
-        }
-    }
-
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h * 6.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (r1 + m, g1 + m, b1 + m)
 }
 
 impl eframe::App for JamApp {
@@ -560,6 +635,7 @@ impl eframe::App for JamApp {
                 "filter changed"
             );
             self.prev_filter_bitfield = filter;
+            self.color_lut = build_color_lut(&self.selected_events);
         }
         #[cfg(target_arch = "wasm32")]
         self.data.borrow_mut().directed_buffer.set_enabled_types(filter);
@@ -597,6 +673,11 @@ impl eframe::App for JamApp {
             self.render_event_selector(ctx);
         }
 
+        // Legend window (collapsible, anchored bottom-left, hidden when sidebar open)
+        if !self.show_event_selector {
+            self.draw_legend(ctx);
+        }
+
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(colors::BG_PRIMARY))
             .show(ctx, |ui| {
@@ -624,5 +705,127 @@ impl eframe::App for JamApp {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn all_selected() -> Vec<bool> {
+        vec![true; 200]
+    }
+
+    fn none_selected() -> Vec<bool> {
+        vec![false; 200]
+    }
+
+    #[test]
+    fn build_color_lut_multi_category_same_color_per_category() {
+        let sel = all_selected();
+        let lut = build_color_lut(&sel);
+        // All Connection events (20..=28) should share the same color
+        let color_20 = lut.colors[20];
+        for et in 21..=28u8 {
+            assert_eq!(lut.colors[et as usize], color_20,
+                "Connection event {} should match event 20", et);
+        }
+    }
+
+    #[test]
+    fn build_color_lut_single_category_distinct_colors() {
+        // Enable only Connection events (20..=28)
+        let mut sel = none_selected();
+        for et in 20..=28u8 {
+            sel[et as usize] = true;
+        }
+        let lut = build_color_lut(&sel);
+        // Each Connection event should have a distinct color
+        let colors: Vec<[f32; 4]> = (20..=28u8).map(|et| lut.colors[et as usize]).collect();
+        for i in 0..colors.len() {
+            assert_ne!(colors[i], [0.0; 4], "Event {} should have non-zero color", 20 + i);
+            for j in (i + 1)..colors.len() {
+                assert_ne!(colors[i], colors[j],
+                    "Events {} and {} should have distinct colors", 20 + i, 20 + j);
+            }
+        }
+    }
+
+    #[test]
+    fn build_color_lut_single_category_unselected_are_zero() {
+        let mut sel = none_selected();
+        for et in 20..=28u8 {
+            sel[et as usize] = true;
+        }
+        let lut = build_color_lut(&sel);
+        // Status event 10 should be zero (not in selected category)
+        assert_eq!(lut.colors[10], [0.0; 4]);
+        // Meta event 0 should be zero
+        assert_eq!(lut.colors[0], [0.0; 4]);
+    }
+
+    #[test]
+    fn build_color_lut_no_events_selected() {
+        let sel = none_selected();
+        let lut = build_color_lut(&sel);
+        // Multi-category mode (0 active categories) — all should use category colors
+        // since the else branch runs
+        for (cat_idx, category) in EVENT_CATEGORIES.iter().enumerate() {
+            let expected = CATEGORY_COLORS[cat_idx];
+            for &et in category.event_types {
+                assert_eq!(lut.colors[et as usize], expected);
+            }
+        }
+    }
+
+    #[test]
+    fn generate_distinct_palette_correct_count() {
+        assert_eq!(generate_distinct_palette(0).len(), 0);
+        assert_eq!(generate_distinct_palette(1).len(), 1);
+        assert_eq!(generate_distinct_palette(5).len(), 5);
+        assert_eq!(generate_distinct_palette(20).len(), 20);
+    }
+
+    #[test]
+    fn generate_distinct_palette_non_zero_alpha() {
+        let palette = generate_distinct_palette(10);
+        for (i, color) in palette.iter().enumerate() {
+            assert!(color[3] > 0.0, "Color {} should have non-zero alpha", i);
+        }
+    }
+
+    #[test]
+    fn generate_distinct_palette_all_distinct() {
+        let palette = generate_distinct_palette(12);
+        for i in 0..palette.len() {
+            for j in (i + 1)..palette.len() {
+                assert_ne!(palette[i], palette[j],
+                    "Colors {} and {} should be distinct", i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn hsl_to_rgb_red() {
+        let (r, g, b) = hsl_to_rgb(0.0, 1.0, 0.5);
+        assert!((r - 1.0).abs() < 0.01);
+        assert!(g.abs() < 0.01);
+        assert!(b.abs() < 0.01);
+    }
+
+    #[test]
+    fn hsl_to_rgb_green() {
+        let (r, g, b) = hsl_to_rgb(1.0 / 3.0, 1.0, 0.5);
+        assert!(r.abs() < 0.01);
+        assert!((g - 1.0).abs() < 0.01);
+        assert!(b.abs() < 0.01);
+    }
+
+    #[test]
+    fn hsl_to_rgb_blue() {
+        let (r, g, b) = hsl_to_rgb(2.0 / 3.0, 1.0, 0.5);
+        assert!(r.abs() < 0.01);
+        assert!(g.abs() < 0.01);
+        assert!((b - 1.0).abs() < 0.01);
     }
 }

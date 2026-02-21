@@ -8,4 +8,4 @@ mod renderer;
 
 pub use data::{DirectedEventBuffer, DirectedParticleInstance, PulseEvent};
 
-pub use renderer::{ColorLut, FilterBitfield, GpuParticle, RingCallback, RingRenderer, Uniforms};
+pub use renderer::{ColorLut, FilterBitfield, GpuParticle, RingCallback, RingRenderer, Uniforms, CATEGORY_COLORS};

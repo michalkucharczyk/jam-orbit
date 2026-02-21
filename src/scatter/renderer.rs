@@ -39,7 +39,6 @@ pub struct ScatterRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
     color_lut_buffer: wgpu::Buffer,
     filter_buffer: wgpu::Buffer,
     instance_buffers: Vec<wgpu::Buffer>,
@@ -281,6 +280,7 @@ impl ScatterRenderer {
         new_particles: &[ScatterParticle],
         uniforms: &ScatterUniforms,
         filter: &FilterBitfield,
+        color_lut: &ColorLut,
     ) {
         // Resize texture if needed
         if dimensions[0] != self.width || dimensions[1] != self.height {
@@ -334,6 +334,7 @@ impl ScatterRenderer {
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
         queue.write_buffer(&self.filter_buffer, 0, bytemuck::bytes_of(filter));
+        queue.write_buffer(&self.color_lut_buffer, 0, bytemuck::bytes_of(color_lut));
 
         // Render to off-screen texture
         {
@@ -371,6 +372,7 @@ pub struct ScatterCallback {
     pub new_particles: Arc<Vec<ScatterParticle>>,
     pub uniforms: ScatterUniforms,
     pub filter: FilterBitfield,
+    pub color_lut: ColorLut,
     pub rect: egui::Rect,
     pub reset: bool,
 }
@@ -400,6 +402,7 @@ impl egui_wgpu::CallbackTrait for ScatterCallback {
             &self.new_particles,
             &self.uniforms,
             &self.filter,
+            &self.color_lut,
         );
         vec![]
     }

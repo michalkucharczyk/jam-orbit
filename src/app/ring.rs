@@ -91,14 +91,11 @@ impl JamApp {
                 new_particles: Arc::new(new_particles),
                 uniforms,
                 filter,
+                color_lut: self.color_lut,
                 reset: false,
             },
         ));
 
-        // Draw color legend (CPU overlay)
-        if self.show_legend && !self.show_event_selector {
-            self.draw_legend(&painter, rect);
-        }
     }
 
     /// CPU ring rendering path (WASM + native --use-cpu fallback)
@@ -235,10 +232,6 @@ impl JamApp {
         // Draw collapsing pulse overlays
         self.draw_pulses(&painter, center, radius, num_nodes_f, now);
 
-        // Draw color legend
-        if self.show_legend && !self.show_event_selector {
-            self.draw_legend(&painter, rect);
-        }
     }
 
 

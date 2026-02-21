@@ -1,7 +1,7 @@
 //! Accordion-style event filter with tri-state + errors checkboxes
 
 use eframe::egui;
-use crate::core::{event_color_rgb, event_name, EVENT_CATEGORIES};
+use crate::core::{event_name, EVENT_CATEGORIES};
 use crate::core::events::ERROR_EVENT_TYPES;
 use crate::theme::colors;
 use super::JamApp;
@@ -80,6 +80,14 @@ impl JamApp {
                     .show(ui, |ui| {
                         let mut new_expanded = self.expanded_category;
 
+                        // Detect single-category mode (exactly one category has any enabled event)
+                        let active_cat_count = EVENT_CATEGORIES.iter()
+                            .filter(|cat| cat.event_types.iter().any(|&et|
+                                (et as usize) < self.selected_events.len() && self.selected_events[et as usize]
+                            ))
+                            .count();
+                        let is_single_category = active_cat_count == 1;
+
                         for (cat_idx, category) in EVENT_CATEGORIES.iter().enumerate() {
                             let selected_count = category
                                 .event_types
@@ -116,18 +124,29 @@ impl JamApp {
                                         egui::Stroke::new(2.0, colors::TEXT_PRIMARY),
                                     );
                                 }
-                                let left_changed = cb.changed();
-                                let left_tooltip = if all_selected {
+                                let left_clicked = cb.clicked();
+                                let modifier = ui.input(|i| i.modifiers.ctrl || i.modifiers.shift);
+                                let left_tooltip = if modifier {
+                                    "Solo this category (Ctrl/Shift+click)"
+                                } else if all_selected {
                                     "Deselect all"
                                 } else {
                                     "Select all"
                                 };
                                 cb.on_hover_text(left_tooltip);
-                                if left_changed {
-                                    toggle_category_all(
-                                        &mut self.selected_events,
-                                        category.event_types,
-                                    );
+                                if left_clicked {
+                                    if modifier {
+                                        // Solo: deselect everything, then enable only this category
+                                        self.selected_events.fill(false);
+                                        for &et in category.event_types {
+                                            self.selected_events[et as usize] = true;
+                                        }
+                                    } else {
+                                        toggle_category_all(
+                                            &mut self.selected_events,
+                                            category.event_types,
+                                        );
+                                    }
                                 }
 
                                 // Right checkbox (errors, red-tinted)
@@ -182,19 +201,23 @@ impl JamApp {
                                     }
                                 }
 
-                                // Color dot
-                                let (r, g, b) = event_color_rgb(category.event_types[0]);
-                                let alpha = if none_selected { 60 } else { 220 };
-                                let dot_color = egui::Color32::from_rgba_unmultiplied(r, g, b, alpha);
-                                let (dot_rect, _) = ui.allocate_exact_size(
-                                    egui::vec2(10.0, 10.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().circle_filled(
-                                    dot_rect.center(),
-                                    5.0,
-                                    dot_color,
-                                );
+                                // Color dot — only in multi-category mode
+                                if !is_single_category {
+                                    let base_color = self.get_event_color(category.event_types[0]);
+                                    let alpha = if none_selected { 60 } else { 220 };
+                                    let dot_color = egui::Color32::from_rgba_unmultiplied(
+                                        base_color.r(), base_color.g(), base_color.b(), alpha,
+                                    );
+                                    let (dot_rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(10.0, 10.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().circle_filled(
+                                        dot_rect.center(),
+                                        5.0,
+                                        dot_color,
+                                    );
+                                }
 
                                 // Category name + count + arrow (single clickable element)
                                 let text_color = if none_selected {
@@ -227,15 +250,38 @@ impl JamApp {
                                         } else {
                                             colors::TEXT_MUTED
                                         };
-                                        if ui
-                                            .checkbox(
-                                                &mut enabled,
-                                                egui::RichText::new(name).color(text_color),
-                                            )
-                                            .changed()
-                                        {
-                                            self.selected_events[et as usize] = enabled;
-                                        }
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 4.0;
+                                            if ui
+                                                .checkbox(
+                                                    &mut enabled,
+                                                    "",
+                                                )
+                                                .changed()
+                                            {
+                                                self.selected_events[et as usize] = enabled;
+                                            }
+
+                                            // Color dot — only in single-category mode
+                                            if is_single_category {
+                                                let evt_color = self.get_event_color(et);
+                                                let alpha = if enabled { 220 } else { 60 };
+                                                let dot_color = egui::Color32::from_rgba_unmultiplied(
+                                                    evt_color.r(), evt_color.g(), evt_color.b(), alpha,
+                                                );
+                                                let (dot_rect, _) = ui.allocate_exact_size(
+                                                    egui::vec2(10.0, 10.0),
+                                                    egui::Sense::hover(),
+                                                );
+                                                ui.painter().circle_filled(
+                                                    dot_rect.center(),
+                                                    5.0,
+                                                    dot_color,
+                                                );
+                                            }
+
+                                            ui.label(egui::RichText::new(name).color(text_color));
+                                        });
                                     }
                                 });
                             }

@@ -51,11 +51,6 @@ impl JamApp {
             });
         });
 
-        // Draw legend overlay on graphs tab
-        if self.show_legend && !self.show_event_selector {
-            let panel_rect = ui.min_rect();
-            self.draw_legend(ui.painter(), panel_rect);
-        }
     }
 
     fn render_time_series(&self, ui: &mut egui::Ui) {
@@ -290,6 +285,7 @@ impl JamApp {
                 new_particles: Arc::new(new_particles),
                 uniforms,
                 filter,
+                color_lut: self.color_lut,
                 rect,
                 reset: true,
             },
