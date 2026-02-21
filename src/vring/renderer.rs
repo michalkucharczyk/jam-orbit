@@ -77,24 +77,189 @@ impl Default for ColorLut {
     }
 }
 
-/// Category colors as [f32; 4] RGBA, matching EVENT_CATEGORIES order:
-/// Status, Connection, Block Auth/Import, Block Distribution, Safrole Tickets,
-/// Work Package, Guaranteeing, Availability, Bundle Recovery, Segment Recovery,
-/// Preimages, Meta
-pub const CATEGORY_COLORS: [[f32; 4]; 12] = [
-    [0.4, 0.8, 0.4, 0.8],   // Status - green
-    [0.4, 0.6, 1.0, 0.8],   // Connection - blue
-    [1.0, 0.8, 0.4, 0.8],   // Block Auth/Import - orange
-    [0.8, 0.4, 1.0, 0.8],   // Block Distribution - purple
-    [1.0, 0.4, 0.4, 0.8],   // Safrole Tickets - red
-    [0.4, 1.0, 0.8, 0.8],   // Work Package - cyan
-    [1.0, 0.4, 0.8, 0.8],   // Guaranteeing - magenta
-    [1.0, 1.0, 0.4, 0.8],   // Availability - yellow
-    [1.0, 0.6, 0.6, 0.8],   // Bundle Recovery - pink
-    [0.6, 0.8, 1.0, 0.8],   // Segment Recovery - light blue
-    [0.8, 0.8, 0.8, 0.8],   // Preimages - light gray
-    [0.5, 0.5, 0.5, 0.8],   // Meta - gray
+/// Predefined color schema for event categories and per-event distinct palettes.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorSchema {
+    #[default]
+    Vivid,
+    Accessible,
+    Pipeline,
+    Monochrome,
+}
+
+impl ColorSchema {
+    pub const ALL: &[ColorSchema] = &[
+        ColorSchema::Vivid,
+        ColorSchema::Accessible,
+        ColorSchema::Pipeline,
+        ColorSchema::Monochrome,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Vivid => "Vivid",
+            Self::Accessible => "Accessible",
+            Self::Pipeline => "Pipeline",
+            Self::Monochrome => "Mono",
+        }
+    }
+
+    /// Category colors [f32; 4] RGBA, matching EVENT_CATEGORIES order:
+    /// Status, Connection, Block Auth/Import, Block Distribution, Safrole Tickets,
+    /// Work Package, Guaranteeing, Availability, Bundle Recovery, Segment Recovery,
+    /// Preimages, Meta
+    pub fn colors(self) -> &'static [[f32; 4]; 12] {
+        match self {
+            Self::Vivid => &VIVID_COLORS,
+            Self::Accessible => &ACCESSIBLE_COLORS,
+            Self::Pipeline => &PIPELINE_COLORS,
+            Self::Monochrome => &MONOCHROME_COLORS,
+        }
+    }
+
+    /// Generate `n` distinct per-event colors appropriate for this schema.
+    pub fn generate_distinct_palette(self, n: usize) -> Vec<[f32; 4]> {
+        if n == 0 { return vec![]; }
+        if n == 1 { return vec![[1.0, 1.0, 1.0, 0.8]]; }
+
+        match self {
+            Self::Vivid => {
+                // Full HSL rainbow, high saturation
+                (0..n).map(|i| {
+                    let hue = i as f32 / n as f32;
+                    let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.65);
+                    [r, g, b, 0.8]
+                }).collect()
+            }
+            Self::Accessible => {
+                // Cycle through Okabe-Ito 8-color set (colorblind-safe)
+                const OI: [[f32; 3]; 8] = [
+                    [0.90, 0.62, 0.00], // orange
+                    [0.34, 0.71, 0.91], // sky blue
+                    [0.00, 0.62, 0.45], // bluish green
+                    [0.94, 0.89, 0.26], // yellow
+                    [0.00, 0.45, 0.70], // blue
+                    [0.84, 0.37, 0.00], // vermillion
+                    [0.80, 0.47, 0.65], // reddish purple
+                    [0.60, 0.60, 0.20], // olive
+                ];
+                (0..n).map(|i| {
+                    let base = OI[i % OI.len()];
+                    let cycle = (i / OI.len()) as f32;
+                    // Shift lightness on subsequent cycles
+                    let factor = 1.0 - cycle * 0.2;
+                    [base[0] * factor, base[1] * factor, base[2] * factor, 0.8]
+                }).collect()
+            }
+            Self::Pipeline => {
+                // HSL rainbow, slightly desaturated
+                (0..n).map(|i| {
+                    let hue = i as f32 / n as f32;
+                    let (r, g, b) = hsl_to_rgb(hue, 0.6, 0.55);
+                    [r, g, b, 0.8]
+                }).collect()
+            }
+            Self::Monochrome => {
+                // Cyan hue, luminance steps only
+                (0..n).map(|i| {
+                    let lightness = 0.3 + 0.6 * (i as f32 / (n - 1) as f32);
+                    let (r, g, b) = hsl_to_rgb(0.5, 0.5, lightness);
+                    [r, g, b, 0.8]
+                }).collect()
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ColorSchema {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Vivid: infrastructure=cool/muted, consensus=warm/gold, pipeline=saturated primaries, verification=warm
+const VIVID_COLORS: [[f32; 4]; 12] = [
+    [0.40, 0.80, 0.40, 0.8], // Status - muted green
+    [0.40, 0.60, 1.00, 0.8], // Connection - steel blue
+    [1.00, 0.80, 0.40, 0.8], // Block Auth/Import - amber/gold
+    [0.80, 0.40, 1.00, 0.8], // Block Distribution - purple
+    [1.00, 0.40, 0.40, 0.8], // Safrole Tickets - red
+    [0.20, 0.87, 0.67, 0.8], // Work Package - teal (pipeline start)
+    [0.20, 0.73, 0.93, 0.8], // Guaranteeing - bright blue (pipeline mid)
+    [0.93, 0.87, 0.20, 0.8], // Availability - yellow (pipeline end)
+    [0.93, 0.47, 0.20, 0.8], // Bundle Recovery - orange
+    [0.80, 0.40, 0.47, 0.8], // Segment Recovery - rose
+    [0.80, 0.80, 0.80, 0.8], // Preimages - light gray
+    [0.50, 0.50, 0.50, 0.8], // Meta - gray
 ];
+
+/// Accessible: Okabe-Ito palette, safe for deuteranopia/protanopia/tritanopia
+const ACCESSIBLE_COLORS: [[f32; 4]; 12] = [
+    [0.34, 0.71, 0.91, 0.8], // Status - sky blue
+    [0.00, 0.45, 0.70, 0.8], // Connection - blue
+    [0.90, 0.62, 0.00, 0.8], // Block Auth/Import - orange
+    [0.94, 0.89, 0.26, 0.8], // Block Distribution - yellow
+    [0.80, 0.47, 0.65, 0.8], // Safrole Tickets - reddish purple
+    [0.00, 0.62, 0.45, 0.8], // Work Package - bluish green
+    [0.34, 0.71, 0.91, 0.8], // Guaranteeing - sky blue (brighter)
+    [0.84, 0.37, 0.00, 0.8], // Availability - vermillion
+    [0.53, 0.13, 0.33, 0.8], // Bundle Recovery - wine
+    [0.60, 0.60, 0.20, 0.8], // Segment Recovery - olive
+    [0.73, 0.73, 0.73, 0.8], // Preimages - light gray
+    [0.53, 0.53, 0.53, 0.8], // Meta - gray
+];
+
+/// Pipeline: cool-to-warm gradient encoding lifecycle stage, infrastructure grayed out
+const PIPELINE_COLORS: [[f32; 4]; 12] = [
+    [0.47, 0.47, 0.47, 0.8], // Status - neutral gray
+    [0.53, 0.53, 0.53, 0.8], // Connection - neutral gray
+    [0.67, 0.67, 0.67, 0.8], // Block Auth/Import - light gray
+    [0.60, 0.60, 0.60, 0.8], // Block Distribution - mid gray
+    [0.73, 0.60, 0.80, 0.8], // Safrole Tickets - lavender
+    [0.20, 0.40, 0.80, 0.8], // Work Package - deep blue (lifecycle start)
+    [0.20, 0.67, 0.47, 0.8], // Guaranteeing - green (early-mid)
+    [0.80, 0.80, 0.20, 0.8], // Availability - yellow (mid)
+    [0.93, 0.47, 0.20, 0.8], // Bundle Recovery - orange (late)
+    [0.87, 0.27, 0.27, 0.8], // Segment Recovery - red (recovery)
+    [0.40, 0.40, 0.40, 0.8], // Preimages - dark gray
+    [0.33, 0.33, 0.33, 0.8], // Meta - dark gray
+];
+
+/// Monochrome: single cyan hue, luminance differentiation only
+const MONOCHROME_COLORS: [[f32; 4]; 12] = [
+    [0.20, 0.40, 0.40, 0.8], // Status - darkest
+    [0.27, 0.47, 0.47, 0.8], // Connection
+    [0.33, 0.53, 0.53, 0.8], // Block Auth/Import
+    [0.27, 0.60, 0.60, 0.8], // Block Distribution
+    [0.33, 0.67, 0.67, 0.8], // Safrole Tickets
+    [0.40, 0.80, 0.80, 0.8], // Work Package - bright (most important)
+    [0.47, 0.87, 0.87, 0.8], // Guaranteeing
+    [0.53, 0.93, 0.93, 0.8], // Availability - brightest
+    [0.33, 0.67, 0.67, 0.8], // Bundle Recovery
+    [0.27, 0.60, 0.60, 0.8], // Segment Recovery
+    [0.27, 0.47, 0.47, 0.8], // Preimages
+    [0.20, 0.40, 0.40, 0.8], // Meta - darkest
+];
+
+/// Backward-compatible alias
+#[allow(dead_code)]
+pub const CATEGORY_COLORS: [[f32; 4]; 12] = VIVID_COLORS;
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h * 6.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (r1 + m, g1 + m, b1 + m)
+}
 
 /// Event filter bitfield (256 bits = 8 x u32), matches shader's array<vec4<u32>, 2>
 #[repr(C)]

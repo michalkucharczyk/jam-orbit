@@ -23,7 +23,7 @@ use crate::core::{
 };
 use crate::theme::{colors, minimal_visuals};
 use crate::time::now_seconds;
-use crate::vring::{DirectedEventBuffer, PulseEvent, ColorLut, CATEGORY_COLORS};
+use crate::vring::{DirectedEventBuffer, PulseEvent, ColorLut, ColorSchema};
 use crate::ws_state::WsState;
 
 #[cfg(target_arch = "wasm32")]
@@ -105,6 +105,8 @@ pub struct JamApp {
     pub(crate) scatter_texture_id: Option<egui::TextureId>,
     /// Previous filter bitfield for change detection
     prev_filter_bitfield: [u64; 4],
+    /// Previous color schema for change detection
+    prev_color_schema: ColorSchema,
     /// Stats: messages received since last log
     #[cfg(not(target_arch = "wasm32"))]
     stats_msg_count: u64,
@@ -122,7 +124,9 @@ pub struct JamApp {
     pub(crate) particle_count: usize,
     /// Last known particle capacity (for header display)
     pub(crate) particle_max: usize,
-    /// Dynamic color lookup table (recomputed on filter change)
+    /// Active color schema (selectable via header dropdown)
+    pub(crate) color_schema: ColorSchema,
+    /// Dynamic color lookup table (recomputed on filter/schema change)
     pub(crate) color_lut: ColorLut,
     /// Buffered WebSocket messages for time-budgeted processing (WASM only)
     #[cfg(target_arch = "wasm32")]
@@ -239,11 +243,13 @@ impl JamApp {
             gpu_upload_cursor: 0,
             scatter_texture_id,
             prev_filter_bitfield: [u64::MAX; 4],
+            prev_color_schema: ColorSchema::default(),
             active_pulses: Vec::new(),
             errors_only: false,
             particle_count: 0,
             particle_max: 0,
-            color_lut: build_color_lut(&Self::default_selected_events()),
+            color_schema: ColorSchema::default(),
+            color_lut: build_color_lut(&Self::default_selected_events(), ColorSchema::default()),
             msg_buffer,
         }
     }
@@ -323,6 +329,7 @@ impl JamApp {
             gpu_upload_cursor: 0,
             scatter_texture_id,
             prev_filter_bitfield: [u64::MAX; 4],
+            prev_color_schema: ColorSchema::default(),
             stats_msg_count: 0,
             stats_uploaded: 0,
             stats_last_log: 0.0,
@@ -330,7 +337,8 @@ impl JamApp {
             errors_only: false,
             particle_count: 0,
             particle_max: 0,
-            color_lut: build_color_lut(&Self::default_selected_events()),
+            color_schema: ColorSchema::default(),
+            color_lut: build_color_lut(&Self::default_selected_events(), ColorSchema::default()),
         }
     }
 
@@ -517,10 +525,10 @@ impl JamApp {
 
 }
 
-/// Build a ColorLut based on current filter state.
+/// Build a ColorLut based on current filter state and color schema.
 /// Single-category mode (only one category has any enabled events): distinct colors per event type.
 /// Multi-category mode: shared category color for all events in a category.
-fn build_color_lut(selected_events: &[bool]) -> ColorLut {
+fn build_color_lut(selected_events: &[bool], schema: ColorSchema) -> ColorLut {
     let active_categories: Vec<usize> = EVENT_CATEGORIES.iter().enumerate()
         .filter(|(_, cat)| cat.event_types.iter().any(|&et|
             (et as usize) < selected_events.len() && selected_events[et as usize]
@@ -535,6 +543,7 @@ fn build_color_lut(selected_events: &[bool]) -> ColorLut {
     };
 
     let mut lut = ColorLut { colors: [[0.0; 4]; 256] };
+    let category_colors = schema.colors();
 
     if let Some(cat_idx) = single_category {
         // Single category: assign distinct palette colors to each enabled event
@@ -543,14 +552,14 @@ fn build_color_lut(selected_events: &[bool]) -> ColorLut {
             .copied()
             .filter(|&et| (et as usize) < selected_events.len() && selected_events[et as usize])
             .collect();
-        let palette = generate_distinct_palette(enabled.len());
+        let palette = schema.generate_distinct_palette(enabled.len());
         for (i, &et) in enabled.iter().enumerate() {
             lut.colors[et as usize] = palette[i];
         }
     } else {
-        // Multi-category: each event gets its category color
+        // Multi-category: each event gets its category color from the active schema
         for (cat_idx, category) in EVENT_CATEGORIES.iter().enumerate() {
-            let color = CATEGORY_COLORS[cat_idx];
+            let color = category_colors[cat_idx];
             for &et in category.event_types {
                 lut.colors[et as usize] = color;
             }
@@ -558,34 +567,6 @@ fn build_color_lut(selected_events: &[bool]) -> ColorLut {
     }
 
     lut
-}
-
-/// Generate `n` evenly-spaced distinct colors using HSL.
-fn generate_distinct_palette(n: usize) -> Vec<[f32; 4]> {
-    if n == 0 { return vec![]; }
-    if n == 1 { return vec![[1.0, 1.0, 1.0, 0.8]]; }
-
-    (0..n).map(|i| {
-        let hue = i as f32 / n as f32;
-        let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.65);
-        [r, g, b, 0.8]
-    }).collect()
-}
-
-fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let hp = h * 6.0;
-    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
-    let (r1, g1, b1) = match hp as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = l - c / 2.0;
-    (r1 + m, g1 + m, b1 + m)
 }
 
 impl eframe::App for JamApp {
@@ -627,15 +608,19 @@ impl eframe::App for JamApp {
 
         // Sync event filter to directed buffer for ring visualization
         let filter = self.build_filter_bitfield();
-        if filter != self.prev_filter_bitfield {
-            let enabled = filter.iter().map(|w| w.count_ones()).sum::<u32>();
-            info!(
-                enabled_types = enabled,
-                bitfield = ?filter,
-                "filter changed"
-            );
+        let schema_changed = self.color_schema != self.prev_color_schema;
+        if filter != self.prev_filter_bitfield || schema_changed {
+            if !schema_changed {
+                let enabled = filter.iter().map(|w| w.count_ones()).sum::<u32>();
+                info!(
+                    enabled_types = enabled,
+                    bitfield = ?filter,
+                    "filter changed"
+                );
+            }
             self.prev_filter_bitfield = filter;
-            self.color_lut = build_color_lut(&self.selected_events);
+            self.prev_color_schema = self.color_schema;
+            self.color_lut = build_color_lut(&self.selected_events, self.color_schema);
         }
         #[cfg(target_arch = "wasm32")]
         self.data.borrow_mut().directed_buffer.set_enabled_types(filter);
@@ -723,7 +708,7 @@ mod tests {
     #[test]
     fn build_color_lut_multi_category_same_color_per_category() {
         let sel = all_selected();
-        let lut = build_color_lut(&sel);
+        let lut = build_color_lut(&sel, ColorSchema::Vivid);
         // All Connection events (20..=28) should share the same color
         let color_20 = lut.colors[20];
         for et in 21..=28u8 {
@@ -739,7 +724,7 @@ mod tests {
         for et in 20..=28u8 {
             sel[et as usize] = true;
         }
-        let lut = build_color_lut(&sel);
+        let lut = build_color_lut(&sel, ColorSchema::Vivid);
         // Each Connection event should have a distinct color
         let colors: Vec<[f32; 4]> = (20..=28u8).map(|et| lut.colors[et as usize]).collect();
         for i in 0..colors.len() {
@@ -757,7 +742,7 @@ mod tests {
         for et in 20..=28u8 {
             sel[et as usize] = true;
         }
-        let lut = build_color_lut(&sel);
+        let lut = build_color_lut(&sel, ColorSchema::Vivid);
         // Status event 10 should be zero (not in selected category)
         assert_eq!(lut.colors[10], [0.0; 4]);
         // Meta event 0 should be zero
@@ -767,11 +752,11 @@ mod tests {
     #[test]
     fn build_color_lut_no_events_selected() {
         let sel = none_selected();
-        let lut = build_color_lut(&sel);
+        let lut = build_color_lut(&sel, ColorSchema::Vivid);
         // Multi-category mode (0 active categories) — all should use category colors
-        // since the else branch runs
+        let vivid = ColorSchema::Vivid.colors();
         for (cat_idx, category) in EVENT_CATEGORIES.iter().enumerate() {
-            let expected = CATEGORY_COLORS[cat_idx];
+            let expected = vivid[cat_idx];
             for &et in category.event_types {
                 assert_eq!(lut.colors[et as usize], expected);
             }
@@ -779,53 +764,45 @@ mod tests {
     }
 
     #[test]
-    fn generate_distinct_palette_correct_count() {
-        assert_eq!(generate_distinct_palette(0).len(), 0);
-        assert_eq!(generate_distinct_palette(1).len(), 1);
-        assert_eq!(generate_distinct_palette(5).len(), 5);
-        assert_eq!(generate_distinct_palette(20).len(), 20);
+    fn build_color_lut_schema_changes_colors() {
+        let sel = all_selected();
+        let vivid_lut = build_color_lut(&sel, ColorSchema::Vivid);
+        let accessible_lut = build_color_lut(&sel, ColorSchema::Accessible);
+        // Work Package event 90 should have different colors in different schemas
+        assert_ne!(vivid_lut.colors[90], accessible_lut.colors[90],
+            "Different schemas should produce different colors for event 90");
     }
 
     #[test]
-    fn generate_distinct_palette_non_zero_alpha() {
-        let palette = generate_distinct_palette(10);
-        for (i, color) in palette.iter().enumerate() {
-            assert!(color[3] > 0.0, "Color {} should have non-zero alpha", i);
+    fn generate_distinct_palette_correct_count() {
+        for schema in ColorSchema::ALL {
+            assert_eq!(schema.generate_distinct_palette(0).len(), 0);
+            assert_eq!(schema.generate_distinct_palette(1).len(), 1);
+            assert_eq!(schema.generate_distinct_palette(5).len(), 5);
+            assert_eq!(schema.generate_distinct_palette(20).len(), 20);
         }
     }
 
     #[test]
-    fn generate_distinct_palette_all_distinct() {
-        let palette = generate_distinct_palette(12);
-        for i in 0..palette.len() {
-            for j in (i + 1)..palette.len() {
-                assert_ne!(palette[i], palette[j],
-                    "Colors {} and {} should be distinct", i, j);
+    fn generate_distinct_palette_non_zero_alpha() {
+        for schema in ColorSchema::ALL {
+            let palette = schema.generate_distinct_palette(10);
+            for (i, color) in palette.iter().enumerate() {
+                assert!(color[3] > 0.0, "{}: Color {} should have non-zero alpha", schema, i);
             }
         }
     }
 
     #[test]
-    fn hsl_to_rgb_red() {
-        let (r, g, b) = hsl_to_rgb(0.0, 1.0, 0.5);
-        assert!((r - 1.0).abs() < 0.01);
-        assert!(g.abs() < 0.01);
-        assert!(b.abs() < 0.01);
-    }
-
-    #[test]
-    fn hsl_to_rgb_green() {
-        let (r, g, b) = hsl_to_rgb(1.0 / 3.0, 1.0, 0.5);
-        assert!(r.abs() < 0.01);
-        assert!((g - 1.0).abs() < 0.01);
-        assert!(b.abs() < 0.01);
-    }
-
-    #[test]
-    fn hsl_to_rgb_blue() {
-        let (r, g, b) = hsl_to_rgb(2.0 / 3.0, 1.0, 0.5);
-        assert!(r.abs() < 0.01);
-        assert!(g.abs() < 0.01);
-        assert!((b - 1.0).abs() < 0.01);
+    fn generate_distinct_palette_all_distinct() {
+        for schema in ColorSchema::ALL {
+            let palette = schema.generate_distinct_palette(12);
+            for i in 0..palette.len() {
+                for j in (i + 1)..palette.len() {
+                    assert_ne!(palette[i], palette[j],
+                        "{}: Colors {} and {} should be distinct", schema, i, j);
+                }
+            }
+        }
     }
 }
