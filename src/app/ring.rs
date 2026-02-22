@@ -76,6 +76,9 @@ impl JamApp {
         // Draw collapsing pulse overlays
         self.draw_pulses(&painter, center, pixel_radius, num_nodes_f, now);
 
+        // Draw slot pulse
+        Self::draw_slot_pulse(&painter, center, pixel_radius);
+
         // GPU paint callback for particles
         let filter = FilterBitfield::from_u64_bitfield(&self.build_filter_bitfield());
         let aspect_ratio = rect.width() / rect.height();
@@ -236,6 +239,9 @@ impl JamApp {
         // Draw collapsing pulse overlays
         self.draw_pulses(&painter, center, radius, num_nodes_f, now);
 
+        // Draw slot pulse
+        Self::draw_slot_pulse(&painter, center, radius);
+
     }
 
 
@@ -283,5 +289,42 @@ impl JamApp {
             let stroke_width = 1.0 + 1.5 * (1.0 - t);
             painter.circle_stroke(pos, pulse_radius, egui::Stroke::new(stroke_width, color));
         }
+    }
+
+    /// Draw a slot-boundary expanding ring (6-second JAM slot cycle).
+    fn draw_slot_pulse(
+        painter: &egui::Painter,
+        center: egui::Pos2,
+        pixel_radius: f32,
+    ) {
+        const JAM_EPOCH: f64 = 1_735_732_800.0; // Jan 1 2025 00:00:00 UTC
+        const SLOT_DURATION: f64 = 6.0;
+
+        let now_unix = crate::time::now_unix_seconds();
+        let phase = ((now_unix - JAM_EPOCH) % SLOT_DURATION / SLOT_DURATION) as f32;
+
+        // Ease-out: fast start, slow end (quadratic)
+        let eased = 1.0 - (1.0 - phase) * (1.0 - phase);
+        // Expand to ~1.5x ring radius (just past radial particles at ~1.44x)
+        let ring_r = pixel_radius * (1.0 + 0.5 * eased);
+        let fade_t = ((eased - 0.2) / 0.8).clamp(0.0, 1.0);
+        let inv = 1.0 - fade_t;
+        let fade = inv * inv * inv * inv; // quartic: very aggressive fade
+        let alpha = (100.0 * fade) as u8;
+        if alpha == 0 { return; }
+        let stroke_width = 1.5_f32.max(2.0 * (1.0 - eased));
+
+        let color = egui::Color32::from_rgba_unmultiplied(100, 100, 100, alpha);
+
+        // Manual circle with enough segments for smooth rendering at large radii
+        use std::f32::consts::PI;
+        let num_segments = ((ring_r * 0.5) as usize).clamp(64, 256);
+        let points: Vec<egui::Pos2> = (0..=num_segments)
+            .map(|i| {
+                let angle = (i as f32 / num_segments as f32) * 2.0 * PI;
+                center + egui::vec2(angle.cos(), angle.sin()) * ring_r
+            })
+            .collect();
+        painter.add(egui::Shape::line(points, egui::Stroke::new(stroke_width, color)));
     }
 }
