@@ -1,4 +1,4 @@
-//! Shared JAM Visualization App
+//! Shared JAM Orbit App
 //!
 //! This module contains the egui app that runs on both native and WASM platforms.
 
@@ -69,7 +69,7 @@ pub struct SharedData {
     pub pulse_events: Vec<PulseEvent>,
 }
 
-/// JAM Visualization App - runs on both native and WASM
+/// JAM Orbit App - runs on both native and WASM
 pub struct JamApp {
     /// Shared data (platform-specific wrapper)
     #[cfg(target_arch = "wasm32")]

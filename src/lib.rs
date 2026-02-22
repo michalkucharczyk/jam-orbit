@@ -1,4 +1,4 @@
-//! JAM Visualization PoC - Real-time telemetry dashboard
+//! JAM Orbit - Real-time telemetry dashboard
 //!
 //! WASM entry point. Connects to jamtart via WebSocket and displays real-time graphs.
 

@@ -1,4 +1,4 @@
-//! JAM Visualization PoC - Native Desktop App
+//! JAM Orbit - Native Desktop App
 //!
 //! Run with: cargo run --bin jam-orbit
 
@@ -32,12 +32,12 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([2400.0, 1600.0])
-            .with_title("JAM Visualizer"),
+            .with_title("JAM Orbit"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "JAM Visualizer",
+        "JAM Orbit",
         options,
         Box::new(move |cc| Ok(Box::new(app::JamApp::new(cc, use_cpu)))),
     )

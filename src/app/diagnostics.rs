@@ -77,7 +77,7 @@ impl JamApp {
                     .inner_margin(8.0)
                     .show(ui, |ui| {
                         let header = egui::CollapsingHeader::new(title)
-                            .default_open(true);
+                            .default_open(false);
 
                         header.show(ui, |ui| {
                             ui.set_min_width(ctx.screen_rect().width() * 0.2);
