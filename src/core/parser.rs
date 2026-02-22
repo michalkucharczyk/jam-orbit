@@ -27,10 +27,16 @@ pub struct ParserContext<'a> {
     pub pulse_events: &'a mut Vec<PulseEvent>,
 }
 
+/// Result from parsing a single event message.
+pub struct ParseResult {
+    /// Global event ID from jamtart (`data.id`), used for gap detection.
+    pub event_id: Option<u64>,
+}
+
 /// Parse a WebSocket message and update data structures.
 ///
-/// Returns `Some(())` if an event was successfully parsed, `None` otherwise.
-pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
+/// Returns `Some(ParseResult)` if an event was successfully parsed, `None` otherwise.
+pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<ParseResult> {
     trace!(len = msg.len(), "Parsing message");
 
     let json: Value = serde_json::from_str(msg)
@@ -46,6 +52,7 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
         return None;
     }
 
+    let event_id = json["data"]["id"].as_u64();
     let node_id = json["data"]["node_id"].as_str()?;
 
     // Parse the full Event enum from the "event" field
@@ -149,6 +156,9 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
 
     // Special handling for specific event types
     match &event {
+        Event::Dropped { num, .. } => {
+            trace!(node_id, num, "Dropped event");
+        }
         Event::Status { num_peers, .. } => {
             trace!(node_id, num_peers, "Status event");
             ctx.time_series.push(node_id, *num_peers as f32);
@@ -170,7 +180,7 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
         }
     }
 
-    Some(())
+    Some(ParseResult { event_id })
 }
 
 #[cfg(test)]

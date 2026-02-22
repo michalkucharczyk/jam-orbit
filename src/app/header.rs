@@ -1,23 +1,13 @@
-//! Header bar with controls, tabs, and status
+//! Header bar with controls and tabs
 
 use eframe::egui;
 use crate::theme::colors;
 use crate::time::now_seconds;
-use super::{JamApp, ActiveTab, with_data};
+use super::{JamApp, ActiveTab};
 
 impl JamApp {
     pub(crate) fn render_header(&mut self, ui: &mut egui::Ui) {
         self.fps_counter.tick();
-
-        let ws_state = self.get_ws_state();
-
-        let (validator_count, highest_slot, event_count) = with_data!(self, |data| {
-            (
-                data.time_series.validator_count(),
-                data.blocks.highest_slot(),
-                data.events.node_count(),
-            )
-        });
 
         ui.horizontal(|ui| {
             // LEFT: Control buttons — Filter, Settings, then tabs
@@ -68,53 +58,6 @@ impl JamApp {
                 }
             }
 
-            // RIGHT: Status and stats (right-to-left order)
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.particle_max > 0 {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}/{} particles", self.particle_count, self.particle_max
-                        ))
-                        .color(colors::TEXT_MUTED),
-                    );
-                    ui.label(egui::RichText::new("/").color(colors::TEXT_MUTED));
-                }
-
-                ui.label(
-                    egui::RichText::new(format!("{} nodes", event_count))
-                        .color(colors::TEXT_MUTED),
-                );
-                ui.label(egui::RichText::new("/").color(colors::TEXT_MUTED));
-
-                if let Some(slot) = highest_slot {
-                    ui.label(
-                        egui::RichText::new(format!("slot {}", slot))
-                            .color(colors::TEXT_MUTED),
-                    );
-                    ui.label(egui::RichText::new("/").color(colors::TEXT_MUTED));
-                }
-
-                ui.label(
-                    egui::RichText::new(format!("{} validators", validator_count))
-                        .color(colors::TEXT_MUTED),
-                );
-                ui.label(egui::RichText::new("/").color(colors::TEXT_MUTED));
-
-                ui.label(
-                    egui::RichText::new(format!("{:.0} fps", self.fps_counter.fps()))
-                        .color(colors::TEXT_SECONDARY),
-                );
-
-                ui.add_space(10.0);
-
-                let (status_color, status_text) = match &ws_state {
-                    crate::ws_state::WsState::Connected => (egui::Color32::from_rgb(100, 200, 100), "Connected"),
-                    crate::ws_state::WsState::Connecting => (egui::Color32::from_rgb(200, 200, 100), "Connecting..."),
-                    crate::ws_state::WsState::Disconnected => (egui::Color32::from_rgb(200, 100, 100), "Disconnected"),
-                    crate::ws_state::WsState::Error(_) => (egui::Color32::from_rgb(200, 100, 100), "Error"),
-                };
-                ui.colored_label(status_color, egui::RichText::new(status_text));
-            });
         });
     }
 }

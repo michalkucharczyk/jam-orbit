@@ -7,4 +7,4 @@ pub mod parser;
 pub use data::{BestBlockData, EventStore, TimeSeriesData};
 #[allow(unused_imports)]
 pub use events::{Event, EventType, EVENT_CATEGORIES, event_color_rgb, event_name, OUTBOUND_EVENTS, INBOUND_EVENTS, BIDIR_EVENTS};
-pub use parser::{parse_event, ParserContext};
+pub use parser::{parse_event, ParseResult, ParserContext};

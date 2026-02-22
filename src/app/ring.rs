@@ -51,9 +51,6 @@ impl JamApp {
             });
         self.gpu_upload_cursor = new_cursor;
 
-        #[cfg(not(target_arch = "wasm32"))]
-        { self.stats_uploaded += new_particles.len() as u64; }
-
         // Update particle stats for header display
         self.particle_count = active_count;
         self.particle_max = particle_max;

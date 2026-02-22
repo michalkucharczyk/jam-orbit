@@ -7,6 +7,7 @@ mod filter;
 mod ring;
 mod graphs;
 mod settings;
+mod diagnostics;
 
 use eframe::egui;
 use tracing::info;
@@ -19,7 +20,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crate::core::{
-    parse_event, ParserContext, BestBlockData, EventStore, TimeSeriesData,
+    parse_event, ParseResult, ParserContext, BestBlockData, EventStore, TimeSeriesData,
     EventType, EVENT_CATEGORIES,
 };
 use crate::theme::{colors, minimal_visuals};
@@ -108,15 +109,23 @@ pub struct JamApp {
     prev_filter_bitfield: [u64; 4],
     /// Previous color schema for change detection
     prev_color_schema: ColorSchema,
-    /// Stats: messages received since last log
-    #[cfg(not(target_arch = "wasm32"))]
-    stats_msg_count: u64,
-    /// Stats: particles uploaded since last log
-    #[cfg(not(target_arch = "wasm32"))]
-    stats_uploaded: u64,
-    /// Stats: last log timestamp
-    #[cfg(not(target_arch = "wasm32"))]
-    stats_last_log: f64,
+    /// Diagnostics: total events received (accumulated each tick)
+    pub(crate) diag_events_total: u64,
+    /// Diagnostics: events/sec (computed each tick)
+    pub(crate) diag_events_sec: f64,
+    /// Diagnostics: node-reported drops (sum of Event::Dropped.num)
+    /// Diagnostics: jamtart-side drops (detected via id gaps)
+    pub(crate) diag_server_dropped_total: u64,
+    /// Diagnostics: total dropped/sec (both sources)
+    pub(crate) diag_dropped_sec: f64,
+    /// Internal: events since last 1-second tick
+    diag_events_counter: u64,
+    /// Internal: drops since last 1-second tick
+    diag_dropped_counter: u64,
+    /// Internal: timestamp of last 1-second tick
+    diag_last_tick: f64,
+    /// Internal: last seen data.id for gap detection
+    diag_last_event_id: Option<u64>,
     /// Active collapsing-pulse animations on the ring
     pub(crate) active_pulses: Vec<CollapsingPulse>,
     /// Errors-only filter preset active
@@ -253,6 +262,14 @@ impl JamApp {
             scatter_texture_id,
             prev_filter_bitfield: [u64::MAX; 4],
             prev_color_schema: ColorSchema::default(),
+            diag_events_total: 0,
+            diag_events_sec: 0.0,
+            diag_server_dropped_total: 0,
+            diag_dropped_sec: 0.0,
+            diag_events_counter: 0,
+            diag_dropped_counter: 0,
+            diag_last_tick: 0.0,
+            diag_last_event_id: None,
             active_pulses: Vec::new(),
             errors_only: false,
             particle_count: 0,
@@ -343,9 +360,14 @@ impl JamApp {
             scatter_texture_id,
             prev_filter_bitfield: [u64::MAX; 4],
             prev_color_schema: ColorSchema::default(),
-            stats_msg_count: 0,
-            stats_uploaded: 0,
-            stats_last_log: 0.0,
+            diag_events_total: 0,
+            diag_events_sec: 0.0,
+            diag_server_dropped_total: 0,
+            diag_dropped_sec: 0.0,
+            diag_events_counter: 0,
+            diag_dropped_counter: 0,
+            diag_last_tick: 0.0,
+            diag_last_event_id: None,
             active_pulses: Vec::new(),
             errors_only: false,
             particle_count: 0,
@@ -393,6 +415,22 @@ impl JamApp {
         self.errors_only = false;
     }
 
+    /// Track parse result for diagnostics (jamtart-side gap detection only)
+    fn track_parse_result(&mut self, result: &ParseResult) {
+        self.diag_events_counter += 1;
+        // Server-side gap detection via data.id
+        if let Some(id) = result.event_id {
+            if let Some(last_id) = self.diag_last_event_id {
+                let gap = id.saturating_sub(last_id).saturating_sub(1);
+                if gap > 0 {
+                    self.diag_dropped_counter += gap;
+                    self.diag_server_dropped_total += gap;
+                }
+            }
+            self.diag_last_event_id = Some(id);
+        }
+    }
+
     /// Process incoming WebSocket messages (native)
     #[cfg(not(target_arch = "wasm32"))]
     fn process_messages(&mut self) {
@@ -401,9 +439,9 @@ impl JamApp {
         use std::time::{Duration, Instant};
         const BUDGET: Duration = Duration::from_millis(12);
         let deadline = Instant::now() + BUDGET;
+        let mut results = Vec::new();
         if let Some(ref client) = self.ws_client {
             while let Ok(msg) = client.rx.try_recv() {
-                self.stats_msg_count += 1;
                 let now = now_seconds();
                 let d = &mut self.data;
                 let mut ctx = ParserContext {
@@ -413,11 +451,16 @@ impl JamApp {
                     directed_buffer: &mut d.directed_buffer,
                     pulse_events: &mut d.pulse_events,
                 };
-                parse_event(&msg, &mut ctx, now);
+                if let Some(result) = parse_event(&msg, &mut ctx, now) {
+                    results.push(result);
+                }
                 if Instant::now() >= deadline {
                     break;
                 }
             }
+        }
+        for result in &results {
+            self.track_parse_result(result);
         }
     }
 
@@ -426,22 +469,30 @@ impl JamApp {
     fn process_messages(&mut self) {
         const BUDGET_MS: f64 = 12.0;
         let deadline = js_sys::Date::now() + BUDGET_MS;
-        let mut buf = self.msg_buffer.borrow_mut();
-        let mut data = self.data.borrow_mut();
-        let d = &mut *data;
-        while let Some(msg) = buf.pop_front() {
-            let now = now_seconds();
-            let mut ctx = ParserContext {
-                time_series: &mut d.time_series,
-                blocks: &mut d.blocks,
-                events: &mut d.events,
-                directed_buffer: &mut d.directed_buffer,
-                pulse_events: &mut d.pulse_events,
-            };
-            parse_event(&msg, &mut ctx, now);
-            if js_sys::Date::now() >= deadline {
-                break;
+        let mut results = Vec::new();
+        {
+            let mut buf = self.msg_buffer.borrow_mut();
+            let mut data = self.data.borrow_mut();
+            let d = &mut *data;
+            while let Some(msg) = buf.pop_front() {
+                let now = now_seconds();
+                let mut ctx = ParserContext {
+                    time_series: &mut d.time_series,
+                    blocks: &mut d.blocks,
+                    events: &mut d.events,
+                    directed_buffer: &mut d.directed_buffer,
+                    pulse_events: &mut d.pulse_events,
+                };
+                if let Some(result) = parse_event(&msg, &mut ctx, now) {
+                    results.push(result);
+                }
+                if js_sys::Date::now() >= deadline {
+                    break;
+                }
             }
+        }
+        for result in &results {
+            self.track_parse_result(result);
         }
     }
 
@@ -595,26 +646,30 @@ impl eframe::App for JamApp {
         // Process WebSocket messages (time-budgeted on both platforms)
         self.process_messages();
 
-        // Periodic stats log (~1s)
+        // Periodic diagnostics tick (~1s) — cross-platform
         let now = now_seconds();
-        #[cfg(not(target_arch = "wasm32"))]
-        if now - self.stats_last_log >= 1.0 {
-            let active = self.data.directed_buffer.active_count(now as f32, 5.0);
-            let buffer_len = self.data.directed_buffer.len();
-            let nodes = self.data.events.node_count();
-            let enabled = self.prev_filter_bitfield.iter().map(|w| w.count_ones()).sum::<u32>();
-            info!(
-                ws_events_per_sec = self.stats_msg_count,
-                gpu_uploaded_per_sec = self.stats_uploaded,
-                active_particles = active,
-                buffer_len,
-                nodes,
-                enabled_types = enabled,
-                "stats"
-            );
-            self.stats_msg_count = 0;
-            self.stats_uploaded = 0;
-            self.stats_last_log = now;
+        if now - self.diag_last_tick >= 1.0 {
+            let elapsed = now - self.diag_last_tick;
+            self.diag_events_sec = self.diag_events_counter as f64 / elapsed;
+            self.diag_dropped_sec = self.diag_dropped_counter as f64 / elapsed;
+            self.diag_events_total += self.diag_events_counter;
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let active = self.data.directed_buffer.active_count(now as f32, 5.0);
+                let nodes = self.data.events.node_count();
+                info!(
+                    events_per_sec = self.diag_events_counter,
+                    dropped_per_sec = self.diag_dropped_counter,
+                    active_particles = active,
+                    nodes,
+                    "stats"
+                );
+            }
+
+            self.diag_events_counter = 0;
+            self.diag_dropped_counter = 0;
+            self.diag_last_tick = now;
         }
 
         // Prune old events periodically
@@ -684,6 +739,9 @@ impl eframe::App for JamApp {
         if !self.show_event_selector {
             self.draw_legend(ctx);
         }
+
+        // Diagnostics window (collapsible, anchored top-right)
+        self.draw_diagnostics(ctx);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(colors::BG_PRIMARY))
