@@ -1,6 +1,6 @@
 //! JAM Visualization PoC - Native Desktop App
 //!
-//! Run with: cargo run --bin jam-cli
+//! Run with: cargo run --bin jam-orbit
 
 #[cfg(not(target_arch = "wasm32"))]
 mod app;
@@ -24,7 +24,7 @@ fn main() -> eframe::Result<()> {
     use tracing_subscriber::{fmt, EnvFilter};
 
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,jam_vis_poc=debug"));
+        .unwrap_or_else(|_| EnvFilter::new("info,jam_orbit=debug"));
     fmt().with_env_filter(filter).with_target(true).init();
 
     let use_cpu = std::env::args().any(|a| a == "--use-cpu");

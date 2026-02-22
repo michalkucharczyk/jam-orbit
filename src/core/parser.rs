@@ -239,7 +239,7 @@ mod tests {
 
         let result = parse_event(msg, &mut ctx!(ts, blocks, events, db, pe), 0.0);
         assert!(result.is_some());
-        assert_eq!(ts.validator_count(), 1);
+        assert!(ts.latest_value("abc123").is_some());
         assert_eq!(events.node_count(), 1);
     }
 

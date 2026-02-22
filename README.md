@@ -1,4 +1,4 @@
-# JAM Visualization PoC
+# JAM Orbit
 
 Real-time telemetry dashboard for JAM validators. Connects to [jamtart](https://github.com/jamtart) via WebSocket and visualizes validator metrics.
 
@@ -6,7 +6,7 @@ Real-time telemetry dashboard for JAM validators. Connects to [jamtart](https://
 
 **CLI** (for testing/debugging):
 ```bash
-cargo run --bin jam-cli
+cargo run --bin jam-orbit
 ```
 
 **Dashboard** (WASM):
@@ -65,4 +65,4 @@ src/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JAMTART_WS` | `ws://127.0.0.1:8080/api/ws` | WebSocket endpoint |
-| `RUST_LOG` | `info,jam_vis_poc=debug` | Log level (CLI only) |
+| `RUST_LOG` | `info,jam_orbit=debug` | Log level (CLI only) |

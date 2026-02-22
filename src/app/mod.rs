@@ -31,6 +31,7 @@ use crate::ws_state::WsState;
 #[cfg(target_arch = "wasm32")]
 use crate::websocket_wasm::WsClient;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
 use crate::scatter::ScatterRenderer;

@@ -74,7 +74,7 @@ impl JamApp {
                 });
 
             let series_data: Vec<Vec<f32>> =
-                data.time_series.series.iter().map(|s| s.clone()).collect();
+                data.time_series.series.to_vec();
 
             (point_count, y_min, y_max, series_data)
         });
@@ -399,7 +399,7 @@ impl JamApp {
             })
             .show(ui, |plot_ui| {
                 let num_nodes = rates.len().max(1);
-                let alpha = (255.0_f32 / num_nodes as f32).max(10.0).min(200.0) as u8;
+                let alpha = (255.0_f32 / num_nodes as f32).clamp(10.0, 200.0) as u8;
 
                 for (_node_idx, node_rates) in rates.iter() {
                     if node_rates.len() < 2 {

@@ -6,7 +6,7 @@
 use std::collections::{HashMap, VecDeque};
 use tracing::trace;
 
-use super::events::{Event, GuaranteeDiscardReason};
+use super::events::Event;
 
 /// Time series data - stores num_peers over time per validator
 pub struct TimeSeriesData {
@@ -54,11 +54,6 @@ impl TimeSeriesData {
         let idx = self.node_index.len().min(self.series.len() - 1);
         self.node_index.insert(node_id.to_string(), idx);
         (idx, true)
-    }
-
-    /// Number of unique validators seen
-    pub fn validator_count(&self) -> usize {
-        self.node_index.len()
     }
 
     /// Length of the longest series
@@ -348,147 +343,12 @@ impl EventStore {
         }
     }
 
-    /// Aggregate event rate across all nodes for given event types.
-    /// Returns Vec<f64> of length num_buckets (newest last).
-    pub fn compute_aggregate_rate(
-        &self,
-        event_types: &[u8],
-        now: f64,
-        bucket_duration: f64,
-        num_buckets: usize,
-    ) -> Vec<f64> {
-        let aligned_now = (now / bucket_duration).floor() * bucket_duration;
-        let oldest_time = aligned_now - (bucket_duration * num_buckets as f64);
-        let mut buckets = vec![0.0_f64; num_buckets];
-
-        for node in self.nodes.values() {
-            for &et in event_types {
-                if let Some(events) = node.by_type.get(&et) {
-                    for stored in events {
-                        if stored.timestamp < oldest_time || stored.timestamp >= aligned_now {
-                            continue;
-                        }
-                        let age = aligned_now - stored.timestamp;
-                        let bucket_idx = ((age / bucket_duration) as usize).min(num_buckets - 1);
-                        let bucket_idx = num_buckets - 1 - bucket_idx;
-                        buckets[bucket_idx] += 1.0;
-                    }
-                }
-            }
-        }
-
-        buckets
-    }
-
-    /// Count events of specific types across all nodes in time window.
-    pub fn count_events(&self, event_types: &[u8], now: f64, window: f64) -> u64 {
-        let cutoff = now - window;
-        let mut count = 0u64;
-
-        for node in self.nodes.values() {
-            for &et in event_types {
-                if let Some(events) = node.by_type.get(&et) {
-                    for stored in events {
-                        if stored.timestamp >= cutoff {
-                            count += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        count
-    }
-
-    /// Recent events of specific types with reason strings.
-    /// Returns Vec<RecentError> sorted newest-first, up to `limit`.
-    pub fn recent_errors(
-        &self,
-        event_types: &[u8],
-        limit: usize,
-        now: f64,
-        max_age: f64,
-    ) -> Vec<RecentError> {
-        let cutoff = now - max_age;
-        let mut errors: Vec<RecentError> = Vec::new();
-
-        for node in self.nodes.values() {
-            for &et in event_types {
-                if let Some(events) = node.by_type.get(&et) {
-                    for stored in events.iter().rev() {
-                        if stored.timestamp < cutoff {
-                            break;
-                        }
-                        let reason = stored.event.reason().unwrap_or("").to_string();
-                        errors.push(RecentError {
-                            timestamp: stored.timestamp,
-                            node_index: node.index,
-                            event_type: et,
-                            reason,
-                        });
-                    }
-                }
-            }
-        }
-
-        // Sort newest-first
-        errors.sort_by(|a, b| b.timestamp.partial_cmp(&a.timestamp).unwrap_or(std::cmp::Ordering::Equal));
-        errors.truncate(limit);
-        errors
-    }
-
-    /// Distribution of GuaranteeDiscarded reasons in time window.
-    pub fn discard_reason_distribution(
-        &self,
-        now: f64,
-        window: f64,
-    ) -> Vec<(GuaranteeDiscardReason, u64)> {
-        let cutoff = now - window;
-        let mut counts: HashMap<u8, u64> = HashMap::new();
-
-        for node in self.nodes.values() {
-            if let Some(events) = node.by_type.get(&113) {
-                for stored in events {
-                    if stored.timestamp < cutoff {
-                        continue;
-                    }
-                    if let Event::GuaranteeDiscarded { reason, .. } = &stored.event {
-                        *counts.entry(*reason as u8).or_insert(0) += 1;
-                    }
-                }
-            }
-        }
-
-        let all_reasons = [
-            GuaranteeDiscardReason::PackageReportedOnChain,
-            GuaranteeDiscardReason::ReplacedByBetter,
-            GuaranteeDiscardReason::CannotReportOnChain,
-            GuaranteeDiscardReason::TooManyGuarantees,
-            GuaranteeDiscardReason::Other,
-        ];
-
-        all_reasons
-            .iter()
-            .filter_map(|&r| {
-                let c = counts.get(&(r as u8)).copied().unwrap_or(0);
-                if c > 0 { Some((r, c)) } else { None }
-            })
-            .collect()
-    }
-}
-
-/// A recent error event for display
-pub struct RecentError {
-    pub timestamp: f64,
-    pub node_index: u16,
-    pub event_type: u8,
-    pub reason: String,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::events::{Event, Reason, GuaranteeOutline, GuaranteeDiscardReason};
+    use crate::core::events::Event;
 
     #[test]
     fn test_time_series_push_and_eviction() {
@@ -499,7 +359,8 @@ mod tests {
         ts.push("node1", 2.0);
         ts.push("node1", 3.0);
 
-        assert_eq!(ts.validator_count(), 1);
+        assert!(ts.latest_value("node1").is_some());
+        assert!(ts.latest_value("node2").is_none());
         assert_eq!(ts.max_series_len(), 3);
 
         // Push beyond max_points to trigger eviction
@@ -510,7 +371,7 @@ mod tests {
 
         // Push to second node
         ts.push("node2", 5.0);
-        assert_eq!(ts.validator_count(), 2);
+        assert!(ts.latest_value("node2").is_some());
 
         // Verify point_count - returns length of first series
         assert_eq!(ts.point_count(), 3); // node1 has 3 points
@@ -536,91 +397,6 @@ mod tests {
         // Set a higher finalized
         bbd.set_finalized("node2", 95);
         assert_eq!(bbd.highest_finalized(), Some(95));
-    }
-
-    #[test]
-    fn test_event_store_push_and_count() {
-        let mut store = EventStore::new(100, 60.0);
-
-        let now = 50.0;
-
-        // Push Status events to node1
-        let status_event = Event::Status {
-            timestamp: 0,
-            num_peers: 1,
-            num_val_peers: 0,
-            num_sync_peers: 0,
-            num_guarantees: vec![],
-            num_shards: 0,
-            shards_size: 0,
-            num_preimages: 0,
-            preimages_size: 0,
-        };
-        store.push("node1", status_event.clone(), now);
-        store.push("node1", status_event.clone(), now - 1.0);
-
-        // Push ConnectInFailed to node2
-        let error_event = Event::ConnectInFailed {
-            timestamp: 0,
-            connecting_id: 0,
-            reason: Reason("test error".into()),
-        };
-        store.push("node2", error_event, now - 2.0);
-
-        assert_eq!(store.node_count(), 2);
-
-        // Count Status events (type 10) within window
-        let count = store.count_events(&[10], now, 10.0);
-        assert_eq!(count, 2);
-
-        // Count ConnectInFailed events (type 22)
-        let count = store.count_events(&[22], now, 10.0);
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn test_compute_aggregate_rate() {
-        let mut store = EventStore::new(100, 60.0);
-
-        let now = 60.0;
-        let bucket_duration = 1.0;
-        let num_buckets = 60;
-
-        // Push Status events at known timestamps
-        let status_event = Event::Status {
-            timestamp: 0,
-            num_peers: 1,
-            num_val_peers: 0,
-            num_sync_peers: 0,
-            num_guarantees: vec![],
-            num_shards: 0,
-            shards_size: 0,
-            num_preimages: 0,
-            preimages_size: 0,
-        };
-
-        store.push("node1", status_event.clone(), 59.0);
-        store.push("node1", status_event.clone(), 59.5);
-        store.push("node1", status_event.clone(), 58.0);
-
-        let rates = store.compute_aggregate_rate(&[10], now, bucket_duration, num_buckets);
-
-        // Verify we got the right number of buckets
-        assert_eq!(rates.len(), num_buckets);
-
-        // Sum should be 3 (all events within window)
-        let total: f64 = rates.iter().sum();
-        assert_eq!(total, 3.0);
-
-        // Push event outside window (before oldest_time which is 60.0 - 60.0 = 0.0)
-        // Need to push at negative time or we change now
-        store.push("node1", status_event.clone(), -1.0);
-
-        let rates = store.compute_aggregate_rate(&[10], now, bucket_duration, num_buckets);
-        let total: f64 = rates.iter().sum();
-
-        // Should still be 3 (old event excluded)
-        assert_eq!(total, 3.0);
     }
 
     #[test]
@@ -690,123 +466,15 @@ mod tests {
         store.push("node1", status_event.clone(), 50.0);
         store.push("node1", status_event.clone(), 100.0);
 
-        // Count before prune
-        let count_before = store.count_events(&[10], 100.0, 100.0);
-        assert_eq!(count_before, 3);
-
         // Prune with current time = 100.0, retention = 30.0
         // Events older than 70.0 should be removed
         store.prune(100.0);
 
-        // Count after prune (only event at 100.0 remains)
-        let count_after = store.count_events(&[10], 100.0, 100.0);
-        assert_eq!(count_after, 1);
-    }
-
-    #[test]
-    fn test_recent_errors() {
-        let mut store = EventStore::new(100, 60.0);
-
-        let now = 100.0;
-
-        // Push error events with different reasons and timestamps
-        let error1 = Event::ConnectInFailed {
-            timestamp: 0,
-            connecting_id: 0,
-            reason: Reason("error 1".into()),
-        };
-        let error2 = Event::ConnectInFailed {
-            timestamp: 0,
-            connecting_id: 0,
-            reason: Reason("error 2".into()),
-        };
-        let error3 = Event::ConnectInFailed {
-            timestamp: 0,
-            connecting_id: 0,
-            reason: Reason("error 3".into()),
-        };
-
-        store.push("node1", error1, now - 5.0);
-        store.push("node2", error2, now - 3.0);
-        store.push("node1", error3, now - 1.0);
-
-        // Get recent errors, sorted newest-first
-        let errors = store.recent_errors(&[22], 10, now, 60.0);
-
-        assert_eq!(errors.len(), 3);
-
-        // Verify newest first
-        assert!(errors[0].reason.contains("error 3"));
-        assert!(errors[1].reason.contains("error 2"));
-        assert!(errors[2].reason.contains("error 1"));
-
-        // Test limit
-        let errors_limited = store.recent_errors(&[22], 2, now, 60.0);
-        assert_eq!(errors_limited.len(), 2);
-
-        // Test max_age filter
-        let errors_recent = store.recent_errors(&[22], 10, now, 2.0);
-        assert_eq!(errors_recent.len(), 1); // Only error 3 within 2.0s
-    }
-
-    #[test]
-    fn test_discard_reason_distribution() {
-        let mut store = EventStore::new(100, 60.0);
-
-        let now = 100.0;
-
-        // Create discard events with different reasons
-        let discard1 = Event::GuaranteeDiscarded {
-            timestamp: 0,
-            outline: GuaranteeOutline {
-                work_report_hash: [0u8; 32],
-                slot: 0,
-                guarantors: vec![],
-            },
-            reason: GuaranteeDiscardReason::PackageReportedOnChain,
-        };
-        let discard2 = Event::GuaranteeDiscarded {
-            timestamp: 0,
-            outline: GuaranteeOutline {
-                work_report_hash: [1u8; 32],
-                slot: 0,
-                guarantors: vec![],
-            },
-            reason: GuaranteeDiscardReason::PackageReportedOnChain,
-        };
-        let discard3 = Event::GuaranteeDiscarded {
-            timestamp: 0,
-            outline: GuaranteeOutline {
-                work_report_hash: [2u8; 32],
-                slot: 0,
-                guarantors: vec![],
-            },
-            reason: GuaranteeDiscardReason::ReplacedByBetter,
-        };
-
-        store.push("node1", discard1, now - 1.0);
-        store.push("node1", discard2, now - 2.0);
-        store.push("node2", discard3, now - 3.0);
-
-        let distribution = store.discard_reason_distribution(now, 10.0);
-
-        // Should have counts for both reasons
-        assert!(distribution.len() >= 2);
-
-        let on_chain_count = distribution
-            .iter()
-            .find(|(reason, _)| matches!(reason, GuaranteeDiscardReason::PackageReportedOnChain))
-            .map(|(_, count)| *count)
-            .unwrap_or(0);
-
-        let replaced_count = distribution
-            .iter()
-            .find(|(reason, _)| matches!(reason, GuaranteeDiscardReason::ReplacedByBetter))
-            .map(|(_, count)| *count)
-            .unwrap_or(0);
-
-        assert_eq!(on_chain_count, 2);
-        assert_eq!(replaced_count, 1);
+        // cutoff = 100 - 30 = 70, so events at 10.0 and 50.0 are pruned, only 100.0 remains
+        assert_eq!(store.node_count(), 1);
+        // Verify only 1 Status event remains for node1
+        let remaining = store.node_events("node1", 10).unwrap();
+        assert_eq!(remaining.len(), 1);
     }
 
 }

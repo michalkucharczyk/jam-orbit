@@ -1,12 +1,11 @@
 //! Data structures for validators ring visualization
 //!
 //! - DirectedParticleInstance: GPU-ready particle data (24 bytes)
-//! - PeerRegistry: Maps PeerId → node index
 //! - DirectedEventBuffer: CPU-side ring buffer for directed events
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
-use crate::core::events::{EventType, PeerId};
+use crate::core::events::EventType;
 
 // ============================================================================
 // DirectedParticleInstance - GPU particle data
@@ -69,81 +68,6 @@ pub struct PulseEvent {
     pub event_type: EventType,
     /// Birth time (app-relative seconds)
     pub birth_time: f32,
-}
-
-// ============================================================================
-// PeerRegistry - PeerId to node index mapping
-// ============================================================================
-
-/// Registry mapping PeerId ([u8; 32]) to node index (u16).
-/// Used to translate event peer IDs to positions on the validator ring.
-#[derive(Debug)]
-pub struct PeerRegistry {
-    /// PeerId → node index mapping
-    peer_to_index: HashMap<PeerId, u16>,
-    /// Next available index
-    next_index: u16,
-    /// Maximum number of validators to track
-    max_validators: u16,
-}
-
-impl Default for PeerRegistry {
-    fn default() -> Self {
-        Self::new(1024)
-    }
-}
-
-impl PeerRegistry {
-    /// Create a new registry with specified maximum validators
-    pub fn new(max_validators: u16) -> Self {
-        Self {
-            peer_to_index: HashMap::with_capacity(max_validators as usize),
-            next_index: 0,
-            max_validators,
-        }
-    }
-
-    /// Get index for a PeerId, creating a new one if not exists.
-    /// Returns None if at capacity.
-    pub fn get_or_insert(&mut self, peer_id: &PeerId) -> Option<u16> {
-        if let Some(&idx) = self.peer_to_index.get(peer_id) {
-            return Some(idx);
-        }
-
-        if self.next_index >= self.max_validators {
-            return None; // At capacity
-        }
-
-        let idx = self.next_index;
-        self.next_index += 1;
-        self.peer_to_index.insert(*peer_id, idx);
-        Some(idx)
-    }
-
-    /// Lookup only, no insertion
-    #[inline]
-    #[allow(dead_code)]
-    pub fn get(&self, peer_id: &PeerId) -> Option<u16> {
-        self.peer_to_index.get(peer_id).copied()
-    }
-
-    /// Number of registered peers
-    pub fn len(&self) -> usize {
-        self.peer_to_index.len()
-    }
-
-    /// Check if registry is empty
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.peer_to_index.is_empty()
-    }
-
-    /// Clear all registrations
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.peer_to_index.clear();
-        self.next_index = 0;
-    }
 }
 
 // ============================================================================
@@ -268,7 +192,8 @@ impl DirectedEventBuffer {
         &self.particles
     }
 
-    /// Number of particles in buffer
+    /// Number of particles in buffer (used in tests)
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.particles.len()
     }
@@ -303,27 +228,6 @@ impl DirectedEventBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_peer_registry() {
-        let mut registry = PeerRegistry::new(10);
-
-        let peer1 = [1u8; 32];
-        let peer2 = [2u8; 32];
-
-        // First insert
-        assert_eq!(registry.get_or_insert(&peer1), Some(0));
-        assert_eq!(registry.get_or_insert(&peer2), Some(1));
-
-        // Repeated lookup
-        assert_eq!(registry.get_or_insert(&peer1), Some(0));
-        assert_eq!(registry.get(&peer1), Some(0));
-        assert_eq!(registry.get(&peer2), Some(1));
-
-        // Unknown peer
-        let peer3 = [3u8; 32];
-        assert_eq!(registry.get(&peer3), None);
-    }
 
     #[test]
     fn test_directed_event_buffer() {

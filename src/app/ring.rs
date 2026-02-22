@@ -72,11 +72,11 @@ impl JamApp {
         );
         let num_dots = num_nodes.min(256);
         let max_peers = peer_counts.iter().cloned().fold(1.0f32, f32::max);
-        for i in 0..num_dots {
+        for (i, &count) in peer_counts.iter().enumerate().take(num_dots) {
             let angle = (i as f32 / num_dots as f32) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * pixel_radius;
             let color = if self.node_brightness_enabled {
-                let brightness = (peer_counts[i] / max_peers).clamp(0.1, 1.0);
+                let brightness = (count / max_peers).clamp(0.1, 1.0);
                 let gray = (80.0 + brightness * 120.0) as u8;
                 let alpha = (60.0 + brightness * 180.0) as u8;
                 egui::Color32::from_rgba_unmultiplied(gray, gray, gray, alpha)
@@ -169,11 +169,11 @@ impl JamApp {
         // Draw node dots (brightness by peer count)
         let num_dots = num_nodes.min(256);
         let max_peers = peer_counts.iter().cloned().fold(1.0f32, f32::max);
-        for i in 0..num_dots {
+        for (i, &count) in peer_counts.iter().enumerate().take(num_dots) {
             let angle = (i as f32 / num_dots as f32) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
             let color = if self.node_brightness_enabled {
-                let brightness = (peer_counts[i] / max_peers).clamp(0.1, 1.0);
+                let brightness = (count / max_peers).clamp(0.1, 1.0);
                 let gray = (80.0 + brightness * 120.0) as u8;
                 let alpha = (60.0 + brightness * 180.0) as u8;
                 egui::Color32::from_rgba_unmultiplied(gray, gray, gray, alpha)
