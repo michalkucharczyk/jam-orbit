@@ -71,7 +71,7 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
                 );
                 ctx.pulse_events.push(PulseEvent {
                     node_index,
-                    event_type: event.event_type() as u8,
+                    event_type: event.event_type(),
                     birth_time: now as f32,
                 });
             }
@@ -91,12 +91,12 @@ pub fn parse_event(msg: &str, ctx: &mut ParserContext, now: f64) -> Option<()> {
                     (peer_index, node_index)
                 };
 
-                let et = event.event_type() as u8;
+                let et_u8 = event.event_type() as u8;
                 // Log WP-related directed events (90-113) for debugging
-                if (90..=113).contains(&et) {
+                if (90..=113).contains(&et_u8) {
                     trace!(
-                        event_type = et,
-                        event_name = crate::core::events::event_name(et),
+                        event_type = et_u8,
+                        event_name = crate::core::events::event_name(event.event_type()),
                         emitter = &node_id[..8],
                         emitter_idx = node_index,
                         peer = &peer_node_id[..8],

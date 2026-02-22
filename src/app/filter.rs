@@ -1,51 +1,65 @@
 //! Accordion-style event filter with tri-state + errors checkboxes
 
 use eframe::egui;
-use crate::core::{event_name, EVENT_CATEGORIES};
-use crate::core::events::ERROR_EVENT_TYPES;
+use crate::core::{event_name, EVENT_CATEGORIES, OUTBOUND_EVENTS, INBOUND_EVENTS, BIDIR_EVENTS};
+use crate::core::events::{ERROR_EVENT_TYPES, EventType};
 use crate::theme::colors;
 use super::JamApp;
 
 // ── Pure state-transition functions (testable without egui) ──
 
 /// Tri-state checkbox click: all→none, else→all.
-pub fn toggle_category_all(selected: &mut [bool], event_types: &[u8]) {
-    let all_on = event_types.iter().all(|&et| selected[et as usize]);
+pub fn toggle_category_all(selected: &mut [bool], event_types: &[EventType]) {
+    let all_on = event_types.iter().all(|&et| selected[et.idx()]);
     let new_val = !all_on;
     for &et in event_types {
-        selected[et as usize] = new_val;
+        selected[et.idx()] = new_val;
     }
 }
 
 /// Errors checkbox click: if already errors-only→all, else→errors-only.
-pub fn toggle_category_errors(selected: &mut [bool], event_types: &[u8]) {
+pub fn toggle_category_errors(selected: &mut [bool], event_types: &[EventType]) {
     let is_errors_only = event_types.iter().all(|&et| {
         let is_err = ERROR_EVENT_TYPES.contains(&et);
-        selected[et as usize] == is_err
+        selected[et.idx()] == is_err
     });
     if is_errors_only {
-        // Restore to all
         for &et in event_types {
-            selected[et as usize] = true;
+            selected[et.idx()] = true;
         }
     } else {
-        // Set errors only
         for &et in event_types {
-            selected[et as usize] = ERROR_EVENT_TYPES.contains(&et);
+            selected[et.idx()] = ERROR_EVENT_TYPES.contains(&et);
         }
     }
 }
 
 /// Check if a category is in "errors only" state.
-pub fn is_errors_only(selected: &[bool], event_types: &[u8]) -> bool {
-    let has_any_error = event_types.iter().any(|&et| ERROR_EVENT_TYPES.contains(&et));
+pub fn is_errors_only(selected: &[bool], event_types: &[EventType]) -> bool {
+    let has_any_error = event_types.iter().any(|et| ERROR_EVENT_TYPES.contains(et));
     if !has_any_error {
         return false;
     }
     event_types.iter().all(|&et| {
         let is_err = ERROR_EVENT_TYPES.contains(&et);
-        selected[et as usize] == is_err
+        selected[et.idx()] == is_err
     })
+}
+
+/// Narrow selection: keep only events in `keep` set, disable all others.
+pub fn narrow_keep_only(selected: &mut [bool], keep: &[EventType]) {
+    for (i, sel) in selected.iter_mut().enumerate() {
+        if !keep.iter().any(|&et| et.idx() == i) {
+            *sel = false;
+        }
+    }
+}
+
+/// Narrow selection: remove events in `remove` set.
+pub fn narrow_remove(selected: &mut [bool], remove: &[EventType]) {
+    for &et in remove {
+        selected[et.idx()] = false;
+    }
 }
 
 // ── UI rendering ──
@@ -75,6 +89,33 @@ impl JamApp {
                 ui.separator();
                 ui.add_space(4.0);
 
+                // ── Narrowing buttons ──
+                ui.label(egui::RichText::new("Narrow:").color(colors::TEXT_MUTED));
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Outbound").clicked() {
+                        narrow_keep_only(&mut self.selected_events, OUTBOUND_EVENTS);
+                    }
+                    if ui.button("Inbound").clicked() {
+                        narrow_keep_only(&mut self.selected_events, INBOUND_EVENTS);
+                    }
+                    if ui.button("Bidir").clicked() {
+                        narrow_keep_only(&mut self.selected_events, BIDIR_EVENTS);
+                    }
+                    if ui.button("Local").clicked() {
+                        narrow_remove(&mut self.selected_events, OUTBOUND_EVENTS);
+                        narrow_remove(&mut self.selected_events, INBOUND_EVENTS);
+                        narrow_remove(&mut self.selected_events, BIDIR_EVENTS);
+                    }
+                    if ui.button("No Errors").clicked() {
+                        narrow_remove(&mut self.selected_events, ERROR_EVENT_TYPES);
+                    }
+                });
+
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+
                 egui::ScrollArea::vertical()
                     .id_salt("filter_accordion")
                     .show(ui, |ui| {
@@ -83,7 +124,7 @@ impl JamApp {
                         // Detect single-category mode (exactly one category has any enabled event)
                         let active_cat_count = EVENT_CATEGORIES.iter()
                             .filter(|cat| cat.event_types.iter().any(|&et|
-                                (et as usize) < self.selected_events.len() && self.selected_events[et as usize]
+                                et.idx() < self.selected_events.len() && self.selected_events[et.idx()]
                             ))
                             .count();
                         let is_single_category = active_cat_count == 1;
@@ -92,7 +133,7 @@ impl JamApp {
                             let selected_count = category
                                 .event_types
                                 .iter()
-                                .filter(|&&et| self.selected_events[et as usize])
+                                .filter(|&&et| self.selected_events[et.idx()])
                                 .count();
                             let total = category.event_types.len();
                             let all_selected = selected_count == total;
@@ -139,7 +180,7 @@ impl JamApp {
                                         // Solo: deselect everything, then enable only this category
                                         self.selected_events.fill(false);
                                         for &et in category.event_types {
-                                            self.selected_events[et as usize] = true;
+                                            self.selected_events[et.idx()] = true;
                                         }
                                     } else {
                                         toggle_category_all(
@@ -243,7 +284,7 @@ impl JamApp {
                             if is_expanded {
                                 ui.indent(cat_idx, |ui| {
                                     for &et in category.event_types {
-                                        let mut enabled = self.selected_events[et as usize];
+                                        let mut enabled = self.selected_events[et.idx()];
                                         let name = event_name(et);
                                         let text_color = if enabled {
                                             colors::TEXT_PRIMARY
@@ -259,7 +300,7 @@ impl JamApp {
                                                 )
                                                 .changed()
                                             {
-                                                self.selected_events[et as usize] = enabled;
+                                                self.selected_events[et.idx()] = enabled;
                                             }
 
                                             // Color dot — only in single-category mode
@@ -310,11 +351,15 @@ mod tests {
         vec![false; 256]
     }
 
-    // Use Connection category: event_types = [20..28]
-    // Error events in Connection: 22 (ConnectFailed), 26 (ConnectionDropped)
-    const CONNECTION_EVENTS: &[u8] = &[20, 21, 22, 23, 24, 25, 26, 27, 28];
+    use crate::core::events::EventType;
 
-    fn connection_error_types() -> Vec<u8> {
+    const CONNECTION_EVENTS: &[EventType] = &[
+        EventType::ConnectionRefused, EventType::ConnectingIn, EventType::ConnectInFailed,
+        EventType::ConnectedIn, EventType::ConnectingOut, EventType::ConnectOutFailed,
+        EventType::ConnectedOut, EventType::Disconnected, EventType::PeerMisbehaved,
+    ];
+
+    fn connection_error_types() -> Vec<EventType> {
         CONNECTION_EVENTS
             .iter()
             .copied()
@@ -326,34 +371,34 @@ mod tests {
     fn click_left_when_all_selected_turns_none() {
         let mut sel = all_selected();
         toggle_category_all(&mut sel, CONNECTION_EVENTS);
-        assert!(CONNECTION_EVENTS.iter().all(|&et| !sel[et as usize]));
+        assert!(CONNECTION_EVENTS.iter().all(|&et| !sel[et.idx()]));
     }
 
     #[test]
     fn click_left_when_none_selected_turns_all() {
         let mut sel = none_selected();
         toggle_category_all(&mut sel, CONNECTION_EVENTS);
-        assert!(CONNECTION_EVENTS.iter().all(|&et| sel[et as usize]));
+        assert!(CONNECTION_EVENTS.iter().all(|&et| sel[et.idx()]));
     }
 
     #[test]
     fn click_left_when_partial_turns_all() {
         let mut sel = none_selected();
-        sel[20] = true;
-        sel[21] = true;
+        sel[EventType::ConnectionRefused.idx()] = true;
+        sel[EventType::ConnectingIn.idx()] = true;
         toggle_category_all(&mut sel, CONNECTION_EVENTS);
-        assert!(CONNECTION_EVENTS.iter().all(|&et| sel[et as usize]));
+        assert!(CONNECTION_EVENTS.iter().all(|&et| sel[et.idx()]));
     }
 
     #[test]
     fn click_left_when_errors_only_turns_all() {
         let mut sel = none_selected();
         for &et in &connection_error_types() {
-            sel[et as usize] = true;
+            sel[et.idx()] = true;
         }
         assert!(is_errors_only(&sel, CONNECTION_EVENTS));
         toggle_category_all(&mut sel, CONNECTION_EVENTS);
-        assert!(CONNECTION_EVENTS.iter().all(|&et| sel[et as usize]));
+        assert!(CONNECTION_EVENTS.iter().all(|&et| sel[et.idx()]));
     }
 
     #[test]
@@ -362,7 +407,7 @@ mod tests {
         toggle_category_errors(&mut sel, CONNECTION_EVENTS);
         let errs = connection_error_types();
         for &et in CONNECTION_EVENTS {
-            assert_eq!(sel[et as usize], errs.contains(&et));
+            assert_eq!(sel[et.idx()], errs.contains(&et));
         }
     }
 
@@ -372,7 +417,7 @@ mod tests {
         toggle_category_errors(&mut sel, CONNECTION_EVENTS);
         let errs = connection_error_types();
         for &et in CONNECTION_EVENTS {
-            assert_eq!(sel[et as usize], errs.contains(&et));
+            assert_eq!(sel[et.idx()], errs.contains(&et));
         }
     }
 
@@ -380,30 +425,89 @@ mod tests {
     fn click_right_when_errors_only_turns_all() {
         let mut sel = none_selected();
         for &et in &connection_error_types() {
-            sel[et as usize] = true;
+            sel[et.idx()] = true;
         }
         toggle_category_errors(&mut sel, CONNECTION_EVENTS);
-        assert!(CONNECTION_EVENTS.iter().all(|&et| sel[et as usize]));
+        assert!(CONNECTION_EVENTS.iter().all(|&et| sel[et.idx()]));
     }
 
     #[test]
     fn click_right_when_partial_turns_errors_only() {
         let mut sel = none_selected();
-        sel[20] = true;
-        sel[23] = true;
+        sel[EventType::ConnectionRefused.idx()] = true;
+        sel[EventType::ConnectedIn.idx()] = true;
         toggle_category_errors(&mut sel, CONNECTION_EVENTS);
         let errs = connection_error_types();
         for &et in CONNECTION_EVENTS {
-            assert_eq!(sel[et as usize], errs.contains(&et));
+            assert_eq!(sel[et.idx()], errs.contains(&et));
         }
+    }
+
+    #[test]
+    fn narrow_keep_only_intersects_selection() {
+        use crate::core::events::EventType;
+        let mut sel = all_selected();
+        let keep = &[EventType::ConnectedIn, EventType::ConnectingOut, EventType::Disconnected];
+        narrow_keep_only(&mut sel, keep);
+        assert!(sel[EventType::ConnectedIn as usize]);
+        assert!(sel[EventType::ConnectingOut as usize]);
+        assert!(sel[EventType::Disconnected as usize]);
+        assert!(!sel[EventType::Status as usize]);
+        assert!(!sel[EventType::SendingGuarantee as usize]);
+    }
+
+    #[test]
+    fn narrow_keep_only_preserves_already_disabled() {
+        use crate::core::events::EventType;
+        let mut sel = none_selected();
+        sel[EventType::ConnectedIn as usize] = true;
+        sel[EventType::ConnectingOut as usize] = true;
+        sel[EventType::Status as usize] = true;
+        let keep = &[EventType::ConnectedIn, EventType::ConnectingOut, EventType::Disconnected];
+        narrow_keep_only(&mut sel, keep);
+        assert!(sel[EventType::ConnectedIn as usize]);
+        assert!(sel[EventType::ConnectingOut as usize]);
+        assert!(!sel[EventType::Disconnected as usize]); // was false, stays false
+        assert!(!sel[EventType::Status as usize]); // not in keep set
+    }
+
+    #[test]
+    fn narrow_remove_disables_specified() {
+        use crate::core::events::EventType;
+        let mut sel = all_selected();
+        let remove = &[EventType::ConnectionRefused, EventType::ConnectInFailed, EventType::ConnectOutFailed];
+        narrow_remove(&mut sel, remove);
+        assert!(!sel[EventType::ConnectionRefused as usize]);
+        assert!(!sel[EventType::ConnectInFailed as usize]);
+        assert!(!sel[EventType::ConnectOutFailed as usize]);
+        assert!(sel[EventType::ConnectedIn as usize]); // not in remove set
+    }
+
+    #[test]
+    fn narrow_local_removes_all_directed() {
+        use crate::core::{OUTBOUND_EVENTS, INBOUND_EVENTS, BIDIR_EVENTS};
+        use crate::core::events::EventType;
+        let mut sel = all_selected();
+        narrow_remove(&mut sel, OUTBOUND_EVENTS);
+        narrow_remove(&mut sel, INBOUND_EVENTS);
+        narrow_remove(&mut sel, BIDIR_EVENTS);
+        // All directed events should be off
+        for &et in OUTBOUND_EVENTS { assert!(!sel[et as u8 as usize]); }
+        for &et in INBOUND_EVENTS { assert!(!sel[et as u8 as usize]); }
+        for &et in BIDIR_EVENTS { assert!(!sel[et as u8 as usize]); }
+        // Non-directed events should still be on
+        assert!(sel[EventType::Status as usize]);
+        assert!(sel[EventType::Authoring as usize]);
+        assert!(sel[EventType::GuaranteeBuilt as usize]);
     }
 
     #[test]
     fn is_errors_only_false_for_category_without_errors() {
         let sel = all_selected();
-        // Meta has event_type [0], and 0 IS in ERROR_EVENT_TYPES (Dropped),
-        // so use a fake category with no errors
-        let fake_types: &[u8] = &[10, 11, 12, 13]; // Status — check if any are errors
+        let fake_types: &[EventType] = &[
+            EventType::Status, EventType::BestBlockChanged,
+            EventType::FinalizedBlockChanged, EventType::SyncStatusChanged,
+        ];
         let has_errors = fake_types.iter().any(|et| ERROR_EVENT_TYPES.contains(et));
         if !has_errors {
             assert!(!is_errors_only(&sel, fake_types));

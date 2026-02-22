@@ -314,14 +314,15 @@ impl JamApp {
                 let mut points: Vec<[f64; 2]> = Vec::new();
 
                 for &event_type in category.event_types {
-                    if (event_type as usize) >= self.selected_events.len()
-                        || !self.selected_events[event_type as usize]
+                    if event_type.idx() >= self.selected_events.len()
+                        || !self.selected_events[event_type.idx()]
                     {
                         continue;
                     }
 
+                    let et_u8 = event_type as u8;
                     for (_, node) in data.events.nodes() {
-                        if let Some(events) = node.by_type.get(&event_type) {
+                        if let Some(events) = node.by_type.get(&et_u8) {
                             for stored in events {
                                 if stored.timestamp >= cutoff {
                                     let age = now - stored.timestamp;

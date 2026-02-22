@@ -152,7 +152,11 @@ impl JamApp {
         const DIRECTED_SPEED: f32 = 8.0;
         for particle in &active_particles {
             let age = now - particle.birth_time;
-            let color = self.get_event_color(particle.event_type as u8);
+            let et_idx = particle.event_type as usize;
+            let [r, g, b, a] = self.color_lut.colors[et_idx];
+            let color = egui::Color32::from_rgba_unmultiplied(
+                (r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, (a * 255.0) as u8,
+            );
 
             if particle.source_index == particle.target_index {
                 // ── Radial: circle particle (unchanged) ──
@@ -250,7 +254,7 @@ impl JamApp {
 
         for pulse in &self.active_pulses {
             // Respect event type filter
-            let et = pulse.event_type as usize;
+            let et = pulse.event_type.idx();
             if et < self.selected_events.len() && !self.selected_events[et] {
                 continue;
             }

@@ -22,7 +22,7 @@ impl JamApp {
 
         ui.horizontal(|ui| {
             // LEFT: Control buttons — Filter first
-            let filter_text = if self.show_event_selector { "Filter <<<" } else { "Filter >>>" };
+            let filter_text = if self.show_event_selector { "Filter <" } else { "Filter >" };
             if ui.button(egui::RichText::new(filter_text)).clicked() {
                 self.show_event_selector = !self.show_event_selector;
             }

@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::core::events::PeerId;
+use crate::core::events::{EventType, PeerId};
 
 // ============================================================================
 // DirectedParticleInstance - GPU particle data
@@ -65,8 +65,8 @@ impl DirectedParticleInstance {
 pub struct PulseEvent {
     /// Validator node index on the ring
     pub node_index: u16,
-    /// Event type (for color selection: 40=Authoring, 90=WP Submission)
-    pub event_type: u8,
+    /// Event type (for color selection)
+    pub event_type: EventType,
     /// Birth time (app-relative seconds)
     pub birth_time: f32,
 }

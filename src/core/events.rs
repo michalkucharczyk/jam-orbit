@@ -318,6 +318,9 @@ pub enum EventType {
 }
 
 impl EventType {
+    /// Convert to usize for indexing into arrays (e.g., selected_events, color_lut).
+    pub const fn idx(self) -> usize { self as u8 as usize }
+
     #[allow(dead_code)]
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
@@ -1098,249 +1101,263 @@ impl Event {
 #[allow(dead_code)]
 pub struct EventCategory {
     pub name: &'static str,
-    pub event_types: &'static [u8],
+    pub event_types: &'static [EventType],
 }
+
+use EventType::*;
 
 #[allow(dead_code)]
 pub const EVENT_CATEGORIES: &[EventCategory] = &[
-    EventCategory {
-        name: "Status",
-        event_types: &[10, 11, 12, 13],
-    },
-    EventCategory {
-        name: "Connection",
-        event_types: &[20, 21, 22, 23, 24, 25, 26, 27, 28],
-    },
-    EventCategory {
-        name: "Block Auth/Import",
-        event_types: &[40, 41, 42, 43, 44, 45, 46, 47],
-    },
-    EventCategory {
-        name: "Block Distribution",
-        event_types: &[60, 61, 62, 63, 64, 65, 66, 67, 68],
-    },
-    EventCategory {
-        name: "Safrole Tickets",
-        event_types: &[80, 81, 82, 83, 84],
-    },
-    EventCategory {
-        name: "Work Package",
-        event_types: &[90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104],
-    },
-    EventCategory {
-        name: "Guaranteeing",
-        event_types: &[105, 106, 107, 108, 109, 110, 111, 112, 113],
-    },
-    EventCategory {
-        name: "Availability",
-        event_types: &[120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131],
-    },
-    EventCategory {
-        name: "Bundle Recovery",
-        event_types: &[140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153],
-    },
-    EventCategory {
-        name: "Segment Recovery",
-        event_types: &[
-            160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176,
-            177, 178,
-        ],
-    },
-    EventCategory {
-        name: "Preimages",
-        event_types: &[190, 191, 192, 193, 194, 195, 196, 197, 198, 199],
-    },
-    EventCategory {
-        name: "Meta",
-        event_types: &[0],
-    },
+    EventCategory { name: "Status", event_types: &[
+        Status, BestBlockChanged, FinalizedBlockChanged, SyncStatusChanged,
+    ]},
+    EventCategory { name: "Connection", event_types: &[
+        ConnectionRefused, ConnectingIn, ConnectInFailed, ConnectedIn, ConnectingOut,
+        ConnectOutFailed, ConnectedOut, Disconnected, PeerMisbehaved,
+    ]},
+    EventCategory { name: "Block Auth/Import", event_types: &[
+        Authoring, AuthoringFailed, Authored, Importing,
+        BlockVerificationFailed, BlockVerified, BlockExecutionFailed, BlockExecuted,
+    ]},
+    EventCategory { name: "Block Distribution", event_types: &[
+        BlockAnnouncementStreamOpened, BlockAnnouncementStreamClosed, BlockAnnounced,
+        SendingBlockRequest, ReceivingBlockRequest, BlockRequestFailed,
+        BlockRequestSent, BlockRequestReceived, BlockTransferred,
+    ]},
+    EventCategory { name: "Safrole Tickets", event_types: &[
+        GeneratingTickets, TicketGenerationFailed, TicketsGenerated,
+        TicketTransferFailed, TicketTransferred,
+    ]},
+    EventCategory { name: "Work Package", event_types: &[
+        WorkPackageSubmission, WorkPackageBeingShared, WorkPackageFailed, DuplicateWorkPackage,
+        WorkPackageReceived, Authorized, ExtrinsicDataReceived, ImportsReceived,
+        SharingWorkPackage, WorkPackageSharingFailed, BundleSent, Refined,
+        WorkReportBuilt, WorkReportSignatureSent, WorkReportSignatureReceived,
+    ]},
+    EventCategory { name: "Guaranteeing", event_types: &[
+        GuaranteeBuilt, SendingGuarantee, GuaranteeSendFailed, GuaranteeSent,
+        GuaranteesDistributed, ReceivingGuarantee, GuaranteeReceiveFailed,
+        GuaranteeReceived, GuaranteeDiscarded,
+    ]},
+    EventCategory { name: "Availability", event_types: &[
+        SendingShardRequest, ReceivingShardRequest, ShardRequestFailed,
+        ShardRequestSent, ShardRequestReceived, ShardsTransferred,
+        DistributingAssurance, AssuranceSendFailed, AssuranceSent,
+        AssuranceDistributed, AssuranceReceiveFailed, AssuranceReceived,
+    ]},
+    EventCategory { name: "Bundle Recovery", event_types: &[
+        SendingBundleShardRequest, ReceivingBundleShardRequest, BundleShardRequestFailed,
+        BundleShardRequestSent, BundleShardRequestReceived, BundleShardTransferred,
+        ReconstructingBundle, BundleReconstructed, SendingBundleRequest,
+        ReceivingBundleRequest, BundleRequestFailed, BundleRequestSent,
+        BundleRequestReceived, BundleTransferred,
+    ]},
+    EventCategory { name: "Segment Recovery", event_types: &[
+        WorkPackageHashMapped, SegmentsRootMapped, SendingSegmentShardRequest,
+        ReceivingSegmentShardRequest, SegmentShardRequestFailed, SegmentShardRequestSent,
+        SegmentShardRequestReceived, SegmentShardsTransferred, ReconstructingSegments,
+        SegmentReconstructionFailed, SegmentsReconstructed, SegmentVerificationFailed,
+        SegmentsVerified, SendingSegmentRequest, ReceivingSegmentRequest,
+        SegmentRequestFailed, SegmentRequestSent, SegmentRequestReceived, SegmentsTransferred,
+    ]},
+    EventCategory { name: "Preimages", event_types: &[
+        PreimageAnnouncementFailed, PreimageAnnounced, AnnouncedPreimageForgotten,
+        SendingPreimageRequest, ReceivingPreimageRequest, PreimageRequestFailed,
+        PreimageRequestSent, PreimageRequestReceived, PreimageTransferred, PreimageDiscarded,
+    ]},
+    EventCategory { name: "Meta", event_types: &[Dropped] },
 ];
 
 /// Event types representing errors, failures, disconnections, and discards.
-pub const ERROR_EVENT_TYPES: &[u8] = &[
-    // Meta
-    0,   // Dropped
-    // Connection
-    20,  // ConnectionRefused
-    22,  // ConnectInFailed
-    25,  // ConnectOutFailed
-    27,  // Disconnected
-    28,  // PeerMisbehaved
-    // Block Auth/Import
-    41,  // AuthoringFailed
-    44,  // BlockVerificationFailed
-    46,  // BlockExecutionFailed
-    // Block Distribution
-    61,  // BlockAnnouncementStreamClosed
-    65,  // BlockRequestFailed
-    // Safrole Tickets
-    81,  // TicketGenerationFailed
-    83,  // TicketTransferFailed
-    // Work Package
-    92,  // WorkPackageFailed
-    93,  // DuplicateWorkPackage
-    99,  // WorkPackageSharingFailed
-    // Guaranteeing
-    107, // GuaranteeSendFailed
-    111, // GuaranteeReceiveFailed
-    113, // GuaranteeDiscarded
-    // Availability
-    122, // ShardRequestFailed
-    127, // AssuranceSendFailed
-    130, // AssuranceReceiveFailed
-    // Bundle Recovery
-    142, // BundleShardRequestFailed
-    150, // BundleRequestFailed
-    // Segment Recovery
-    164, // SegmentShardRequestFailed
-    169, // SegmentReconstructionFailed
-    171, // SegmentVerificationFailed
-    175, // SegmentRequestFailed
-    // Preimages
-    190, // PreimageAnnouncementFailed
-    195, // PreimageRequestFailed
-    199, // PreimageDiscarded
+pub const ERROR_EVENT_TYPES: &[EventType] = &[
+    Dropped,
+    ConnectionRefused, ConnectInFailed, ConnectOutFailed, Disconnected, PeerMisbehaved,
+    AuthoringFailed, BlockVerificationFailed, BlockExecutionFailed,
+    BlockAnnouncementStreamClosed, BlockRequestFailed,
+    TicketGenerationFailed, TicketTransferFailed,
+    WorkPackageFailed, DuplicateWorkPackage, WorkPackageSharingFailed,
+    GuaranteeSendFailed, GuaranteeReceiveFailed, GuaranteeDiscarded,
+    ShardRequestFailed, AssuranceSendFailed, AssuranceReceiveFailed,
+    BundleShardRequestFailed, BundleRequestFailed,
+    SegmentShardRequestFailed, SegmentReconstructionFailed, SegmentVerificationFailed, SegmentRequestFailed,
+    PreimageAnnouncementFailed, PreimageRequestFailed, PreimageDiscarded,
+];
+
+/// Events where `directed_peer()` returns `is_outbound: true` (statically known).
+pub const OUTBOUND_EVENTS: &[EventType] = &[
+    EventType::ConnectingOut,
+    EventType::Disconnected,
+    EventType::PeerMisbehaved,
+    EventType::SendingBlockRequest,
+    EventType::SharingWorkPackage,
+    EventType::WorkPackageSharingFailed,
+    EventType::BundleSent,
+    EventType::SendingGuarantee,
+    EventType::SendingShardRequest,
+    EventType::AssuranceSendFailed,
+    EventType::AssuranceSent,
+];
+
+/// Events where `directed_peer()` returns `is_outbound: false` (statically known).
+pub const INBOUND_EVENTS: &[EventType] = &[
+    EventType::ConnectedIn,
+    EventType::ReceivingBlockRequest,
+    EventType::WorkPackageBeingShared,
+    EventType::WorkReportSignatureReceived,
+    EventType::ReceivingGuarantee,
+    EventType::ReceivingShardRequest,
+    EventType::AssuranceReceiveFailed,
+    EventType::AssuranceReceived,
+];
+
+/// Events where direction is determined at runtime by `ConnectionSide` field.
+pub const BIDIR_EVENTS: &[EventType] = &[
+    EventType::BlockAnnouncementStreamOpened,
+    EventType::BlockAnnouncementStreamClosed,
+    EventType::BlockAnnounced,
+    EventType::TicketTransferFailed,
+    EventType::TicketTransferred,
 ];
 
 /// Get the human-readable name for an event type
 #[allow(dead_code)]
-pub fn event_name(event_type: u8) -> &'static str {
-    match event_type {
-        0 => "Dropped",
-        10 => "Status",
-        11 => "BestBlockChanged",
-        12 => "FinalizedBlockChanged",
-        13 => "SyncStatusChanged",
-        20 => "ConnectionRefused",
-        21 => "ConnectingIn",
-        22 => "ConnectInFailed",
-        23 => "ConnectedIn",
-        24 => "ConnectingOut",
-        25 => "ConnectOutFailed",
-        26 => "ConnectedOut",
-        27 => "Disconnected",
-        28 => "PeerMisbehaved",
-        40 => "Authoring",
-        41 => "AuthoringFailed",
-        42 => "Authored",
-        43 => "Importing",
-        44 => "BlockVerificationFailed",
-        45 => "BlockVerified",
-        46 => "BlockExecutionFailed",
-        47 => "BlockExecuted",
-        60 => "BlockAnnouncementStreamOpened",
-        61 => "BlockAnnouncementStreamClosed",
-        62 => "BlockAnnounced",
-        63 => "SendingBlockRequest",
-        64 => "ReceivingBlockRequest",
-        65 => "BlockRequestFailed",
-        66 => "BlockRequestSent",
-        67 => "BlockRequestReceived",
-        68 => "BlockTransferred",
-        80 => "GeneratingTickets",
-        81 => "TicketGenerationFailed",
-        82 => "TicketsGenerated",
-        83 => "TicketTransferFailed",
-        84 => "TicketTransferred",
-        90 => "WorkPackageSubmission",
-        91 => "WorkPackageBeingShared",
-        92 => "WorkPackageFailed",
-        93 => "DuplicateWorkPackage",
-        94 => "WorkPackageReceived",
-        95 => "Authorized",
-        96 => "ExtrinsicDataReceived",
-        97 => "ImportsReceived",
-        98 => "SharingWorkPackage",
-        99 => "WorkPackageSharingFailed",
-        100 => "BundleSent",
-        101 => "Refined",
-        102 => "WorkReportBuilt",
-        103 => "WorkReportSignatureSent",
-        104 => "WorkReportSignatureReceived",
-        105 => "GuaranteeBuilt",
-        106 => "SendingGuarantee",
-        107 => "GuaranteeSendFailed",
-        108 => "GuaranteeSent",
-        109 => "GuaranteesDistributed",
-        110 => "ReceivingGuarantee",
-        111 => "GuaranteeReceiveFailed",
-        112 => "GuaranteeReceived",
-        113 => "GuaranteeDiscarded",
-        120 => "SendingShardRequest",
-        121 => "ReceivingShardRequest",
-        122 => "ShardRequestFailed",
-        123 => "ShardRequestSent",
-        124 => "ShardRequestReceived",
-        125 => "ShardsTransferred",
-        126 => "DistributingAssurance",
-        127 => "AssuranceSendFailed",
-        128 => "AssuranceSent",
-        129 => "AssuranceDistributed",
-        130 => "AssuranceReceiveFailed",
-        131 => "AssuranceReceived",
-        140 => "SendingBundleShardRequest",
-        141 => "ReceivingBundleShardRequest",
-        142 => "BundleShardRequestFailed",
-        143 => "BundleShardRequestSent",
-        144 => "BundleShardRequestReceived",
-        145 => "BundleShardTransferred",
-        146 => "ReconstructingBundle",
-        147 => "BundleReconstructed",
-        148 => "SendingBundleRequest",
-        149 => "ReceivingBundleRequest",
-        150 => "BundleRequestFailed",
-        151 => "BundleRequestSent",
-        152 => "BundleRequestReceived",
-        153 => "BundleTransferred",
-        160 => "WorkPackageHashMapped",
-        161 => "SegmentsRootMapped",
-        162 => "SendingSegmentShardRequest",
-        163 => "ReceivingSegmentShardRequest",
-        164 => "SegmentShardRequestFailed",
-        165 => "SegmentShardRequestSent",
-        166 => "SegmentShardRequestReceived",
-        167 => "SegmentShardsTransferred",
-        168 => "ReconstructingSegments",
-        169 => "SegmentReconstructionFailed",
-        170 => "SegmentsReconstructed",
-        171 => "SegmentVerificationFailed",
-        172 => "SegmentsVerified",
-        173 => "SendingSegmentRequest",
-        174 => "ReceivingSegmentRequest",
-        175 => "SegmentRequestFailed",
-        176 => "SegmentRequestSent",
-        177 => "SegmentRequestReceived",
-        178 => "SegmentsTransferred",
-        190 => "PreimageAnnouncementFailed",
-        191 => "PreimageAnnounced",
-        192 => "AnnouncedPreimageForgotten",
-        193 => "SendingPreimageRequest",
-        194 => "ReceivingPreimageRequest",
-        195 => "PreimageRequestFailed",
-        196 => "PreimageRequestSent",
-        197 => "PreimageRequestReceived",
-        198 => "PreimageTransferred",
-        199 => "PreimageDiscarded",
-        _ => "Unknown",
+pub fn event_name(et: EventType) -> &'static str {
+    match et {
+        Dropped => "Dropped",
+        Status => "Status",
+        BestBlockChanged => "BestBlockChanged",
+        FinalizedBlockChanged => "FinalizedBlockChanged",
+        SyncStatusChanged => "SyncStatusChanged",
+        ConnectionRefused => "ConnectionRefused",
+        ConnectingIn => "ConnectingIn",
+        ConnectInFailed => "ConnectInFailed",
+        ConnectedIn => "ConnectedIn",
+        ConnectingOut => "ConnectingOut",
+        ConnectOutFailed => "ConnectOutFailed",
+        ConnectedOut => "ConnectedOut",
+        Disconnected => "Disconnected",
+        PeerMisbehaved => "PeerMisbehaved",
+        Authoring => "Authoring",
+        AuthoringFailed => "AuthoringFailed",
+        Authored => "Authored",
+        Importing => "Importing",
+        BlockVerificationFailed => "BlockVerificationFailed",
+        BlockVerified => "BlockVerified",
+        BlockExecutionFailed => "BlockExecutionFailed",
+        BlockExecuted => "BlockExecuted",
+        BlockAnnouncementStreamOpened => "BlockAnnouncementStreamOpened",
+        BlockAnnouncementStreamClosed => "BlockAnnouncementStreamClosed",
+        BlockAnnounced => "BlockAnnounced",
+        SendingBlockRequest => "SendingBlockRequest",
+        ReceivingBlockRequest => "ReceivingBlockRequest",
+        BlockRequestFailed => "BlockRequestFailed",
+        BlockRequestSent => "BlockRequestSent",
+        BlockRequestReceived => "BlockRequestReceived",
+        BlockTransferred => "BlockTransferred",
+        GeneratingTickets => "GeneratingTickets",
+        TicketGenerationFailed => "TicketGenerationFailed",
+        TicketsGenerated => "TicketsGenerated",
+        TicketTransferFailed => "TicketTransferFailed",
+        TicketTransferred => "TicketTransferred",
+        WorkPackageSubmission => "WorkPackageSubmission",
+        WorkPackageBeingShared => "WorkPackageBeingShared",
+        WorkPackageFailed => "WorkPackageFailed",
+        DuplicateWorkPackage => "DuplicateWorkPackage",
+        WorkPackageReceived => "WorkPackageReceived",
+        Authorized => "Authorized",
+        ExtrinsicDataReceived => "ExtrinsicDataReceived",
+        ImportsReceived => "ImportsReceived",
+        SharingWorkPackage => "SharingWorkPackage",
+        WorkPackageSharingFailed => "WorkPackageSharingFailed",
+        BundleSent => "BundleSent",
+        Refined => "Refined",
+        WorkReportBuilt => "WorkReportBuilt",
+        WorkReportSignatureSent => "WorkReportSignatureSent",
+        WorkReportSignatureReceived => "WorkReportSignatureReceived",
+        GuaranteeBuilt => "GuaranteeBuilt",
+        SendingGuarantee => "SendingGuarantee",
+        GuaranteeSendFailed => "GuaranteeSendFailed",
+        GuaranteeSent => "GuaranteeSent",
+        GuaranteesDistributed => "GuaranteesDistributed",
+        ReceivingGuarantee => "ReceivingGuarantee",
+        GuaranteeReceiveFailed => "GuaranteeReceiveFailed",
+        GuaranteeReceived => "GuaranteeReceived",
+        GuaranteeDiscarded => "GuaranteeDiscarded",
+        SendingShardRequest => "SendingShardRequest",
+        ReceivingShardRequest => "ReceivingShardRequest",
+        ShardRequestFailed => "ShardRequestFailed",
+        ShardRequestSent => "ShardRequestSent",
+        ShardRequestReceived => "ShardRequestReceived",
+        ShardsTransferred => "ShardsTransferred",
+        DistributingAssurance => "DistributingAssurance",
+        AssuranceSendFailed => "AssuranceSendFailed",
+        AssuranceSent => "AssuranceSent",
+        AssuranceDistributed => "AssuranceDistributed",
+        AssuranceReceiveFailed => "AssuranceReceiveFailed",
+        AssuranceReceived => "AssuranceReceived",
+        SendingBundleShardRequest => "SendingBundleShardRequest",
+        ReceivingBundleShardRequest => "ReceivingBundleShardRequest",
+        BundleShardRequestFailed => "BundleShardRequestFailed",
+        BundleShardRequestSent => "BundleShardRequestSent",
+        BundleShardRequestReceived => "BundleShardRequestReceived",
+        BundleShardTransferred => "BundleShardTransferred",
+        ReconstructingBundle => "ReconstructingBundle",
+        BundleReconstructed => "BundleReconstructed",
+        SendingBundleRequest => "SendingBundleRequest",
+        ReceivingBundleRequest => "ReceivingBundleRequest",
+        BundleRequestFailed => "BundleRequestFailed",
+        BundleRequestSent => "BundleRequestSent",
+        BundleRequestReceived => "BundleRequestReceived",
+        BundleTransferred => "BundleTransferred",
+        WorkPackageHashMapped => "WorkPackageHashMapped",
+        SegmentsRootMapped => "SegmentsRootMapped",
+        SendingSegmentShardRequest => "SendingSegmentShardRequest",
+        ReceivingSegmentShardRequest => "ReceivingSegmentShardRequest",
+        SegmentShardRequestFailed => "SegmentShardRequestFailed",
+        SegmentShardRequestSent => "SegmentShardRequestSent",
+        SegmentShardRequestReceived => "SegmentShardRequestReceived",
+        SegmentShardsTransferred => "SegmentShardsTransferred",
+        ReconstructingSegments => "ReconstructingSegments",
+        SegmentReconstructionFailed => "SegmentReconstructionFailed",
+        SegmentsReconstructed => "SegmentsReconstructed",
+        SegmentVerificationFailed => "SegmentVerificationFailed",
+        SegmentsVerified => "SegmentsVerified",
+        SendingSegmentRequest => "SendingSegmentRequest",
+        ReceivingSegmentRequest => "ReceivingSegmentRequest",
+        SegmentRequestFailed => "SegmentRequestFailed",
+        SegmentRequestSent => "SegmentRequestSent",
+        SegmentRequestReceived => "SegmentRequestReceived",
+        SegmentsTransferred => "SegmentsTransferred",
+        PreimageAnnouncementFailed => "PreimageAnnouncementFailed",
+        PreimageAnnounced => "PreimageAnnounced",
+        AnnouncedPreimageForgotten => "AnnouncedPreimageForgotten",
+        SendingPreimageRequest => "SendingPreimageRequest",
+        ReceivingPreimageRequest => "ReceivingPreimageRequest",
+        PreimageRequestFailed => "PreimageRequestFailed",
+        PreimageRequestSent => "PreimageRequestSent",
+        PreimageRequestReceived => "PreimageRequestReceived",
+        PreimageTransferred => "PreimageTransferred",
+        PreimageDiscarded => "PreimageDiscarded",
     }
 }
 
 /// Get color for event type (for visualization) as RGB tuple
 #[allow(dead_code)]
-pub fn event_color_rgb(event_type: u8) -> (u8, u8, u8) {
-    match event_type {
-        0 => (128, 128, 128),      // Meta - gray
-        10..=13 => (100, 200, 100), // Status - green
-        20..=28 => (100, 150, 255), // Connection - blue
-        40..=47 => (255, 200, 100), // Block auth - orange
-        60..=68 => (200, 100, 255), // Block dist - purple
-        80..=84 => (255, 100, 100), // Tickets - red
+pub fn event_color_rgb(et: EventType) -> (u8, u8, u8) {
+    let v = et as u8;
+    match v {
+        0 => (128, 128, 128),       // Meta - gray
+        10..=13 => (100, 200, 100),  // Status - green
+        20..=28 => (100, 150, 255),  // Connection - blue
+        40..=47 => (255, 200, 100),  // Block auth - orange
+        60..=68 => (200, 100, 255),  // Block dist - purple
+        80..=84 => (255, 100, 100),  // Tickets - red
         90..=104 => (100, 255, 200), // Work Package - cyan
-        105..=113 => (255, 100, 200), // Guaranteeing - magenta
-        120..=131 => (255, 255, 100), // Availability - yellow
-        140..=153 => (255, 150, 150), // Bundle - pink
-        160..=178 => (150, 200, 255), // Segment - light blue
-        190..=199 => (200, 200, 200), // Preimage - light gray
+        105..=113 => (255, 100, 200),// Guaranteeing - magenta
+        120..=131 => (255, 255, 100),// Availability - yellow
+        140..=153 => (255, 150, 150),// Bundle - pink
+        160..=178 => (150, 200, 255),// Segment - light blue
+        190..=199 => (200, 200, 200),// Preimage - light gray
         _ => (255, 255, 255),
     }
 }
@@ -1588,20 +1605,18 @@ mod tests {
 
     #[test]
     fn test_event_name() {
-        assert_eq!(event_name(0), "Dropped");
-        assert_eq!(event_name(10), "Status");
-        assert_eq!(event_name(106), "SendingGuarantee");
-        assert_eq!(event_name(199), "PreimageDiscarded");
-        assert_eq!(event_name(255), "Unknown");
+        assert_eq!(event_name(EventType::Dropped), "Dropped");
+        assert_eq!(event_name(EventType::Status), "Status");
+        assert_eq!(event_name(EventType::SendingGuarantee), "SendingGuarantee");
+        assert_eq!(event_name(EventType::PreimageDiscarded), "PreimageDiscarded");
     }
 
     #[test]
     fn test_event_color_rgb() {
-        assert_eq!(event_color_rgb(0), (128, 128, 128));   // Meta gray
-        assert_eq!(event_color_rgb(10), (100, 200, 100));  // Status green
-        assert_eq!(event_color_rgb(20), (100, 150, 255));  // Connection blue
-        assert_eq!(event_color_rgb(106), (255, 100, 200));  // Guaranteeing magenta
-        assert_eq!(event_color_rgb(250), (255, 255, 255)); // Unknown white
+        assert_eq!(event_color_rgb(EventType::Dropped), (128, 128, 128));
+        assert_eq!(event_color_rgb(EventType::Status), (100, 200, 100));
+        assert_eq!(event_color_rgb(EventType::ConnectionRefused), (100, 150, 255));
+        assert_eq!(event_color_rgb(EventType::SendingGuarantee), (255, 100, 200));
     }
 
     #[test]

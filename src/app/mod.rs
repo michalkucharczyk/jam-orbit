@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use crate::core::{
     parse_event, ParserContext, BestBlockData, EventStore, TimeSeriesData,
-    EVENT_CATEGORIES,
+    EventType, EVENT_CATEGORIES,
 };
 use crate::theme::{colors, minimal_visuals};
 use crate::time::now_seconds;
@@ -53,7 +53,7 @@ pub enum ActiveTab {
 /// An active collapsing-pulse animation on the ring.
 pub(crate) struct CollapsingPulse {
     pub node_index: u16,
-    pub event_type: u8,
+    pub event_type: EventType,
     pub birth_time: f32,
 }
 
@@ -365,7 +365,7 @@ impl JamApp {
         use crate::core::events::ERROR_EVENT_TYPES;
         self.selected_events.fill(false);
         for &et in ERROR_EVENT_TYPES {
-            self.selected_events[et as usize] = true;
+            self.selected_events[et.idx()] = true;
         }
         self.errors_only = true;
     }
@@ -441,8 +441,8 @@ impl JamApp {
     }
 
     /// Get color for event type from the dynamic ColorLut
-    pub(crate) fn get_event_color(&self, event_type: u8) -> egui::Color32 {
-        let [r, g, b, a] = self.color_lut.colors[event_type as usize];
+    pub(crate) fn get_event_color(&self, event_type: EventType) -> egui::Color32 {
+        let [r, g, b, a] = self.color_lut.colors[event_type.idx()];
         egui::Color32::from_rgba_unmultiplied(
             (r * 255.0) as u8,
             (g * 255.0) as u8,
@@ -460,7 +460,7 @@ impl JamApp {
         // Determine if single-category mode
         let active_categories: Vec<usize> = EVENT_CATEGORIES.iter().enumerate()
             .filter(|(_, cat)| cat.event_types.iter().any(|&et|
-                (et as usize) < self.selected_events.len() && self.selected_events[et as usize]
+                et.idx() < self.selected_events.len() && self.selected_events[et.idx()]
             ))
             .map(|(i, _)| i)
             .collect();
@@ -475,14 +475,14 @@ impl JamApp {
         let entries: Vec<(&str, egui::Color32, bool)> = if let Some(cat_idx) = single_category {
             let category = &EVENT_CATEGORIES[cat_idx];
             category.event_types.iter().map(|&et| {
-                let enabled = (et as usize) < self.selected_events.len()
-                    && self.selected_events[et as usize];
+                let enabled = et.idx() < self.selected_events.len()
+                    && self.selected_events[et.idx()];
                 (event_name(et), self.get_event_color(et), enabled)
             }).collect()
         } else {
             EVENT_CATEGORIES.iter().map(|cat| {
                 let enabled = cat.event_types.iter().any(|&et|
-                    (et as usize) < self.selected_events.len() && self.selected_events[et as usize]
+                    et.idx() < self.selected_events.len() && self.selected_events[et.idx()]
                 );
                 (cat.name, self.get_event_color(cat.event_types[0]), enabled)
             }).collect()
@@ -531,7 +531,7 @@ impl JamApp {
 fn build_color_lut(selected_events: &[bool], schema: ColorSchema) -> ColorLut {
     let active_categories: Vec<usize> = EVENT_CATEGORIES.iter().enumerate()
         .filter(|(_, cat)| cat.event_types.iter().any(|&et|
-            (et as usize) < selected_events.len() && selected_events[et as usize]
+            et.idx() < selected_events.len() && selected_events[et.idx()]
         ))
         .map(|(i, _)| i)
         .collect();
@@ -548,20 +548,20 @@ fn build_color_lut(selected_events: &[bool], schema: ColorSchema) -> ColorLut {
     if let Some(cat_idx) = single_category {
         // Single category: assign distinct palette colors to each enabled event
         let category = &EVENT_CATEGORIES[cat_idx];
-        let enabled: Vec<u8> = category.event_types.iter()
+        let enabled: Vec<EventType> = category.event_types.iter()
             .copied()
-            .filter(|&et| (et as usize) < selected_events.len() && selected_events[et as usize])
+            .filter(|&et| et.idx() < selected_events.len() && selected_events[et.idx()])
             .collect();
         let palette = schema.generate_distinct_palette(enabled.len());
         for (i, &et) in enabled.iter().enumerate() {
-            lut.colors[et as usize] = palette[i];
+            lut.colors[et.idx()] = palette[i];
         }
     } else {
         // Multi-category: each event gets its category color from the active schema
         for (cat_idx, category) in EVENT_CATEGORIES.iter().enumerate() {
             let color = category_colors[cat_idx];
             for &et in category.event_types {
-                lut.colors[et as usize] = color;
+                lut.colors[et.idx()] = color;
             }
         }
     }
@@ -711,8 +711,8 @@ mod tests {
         let lut = build_color_lut(&sel, ColorSchema::Vivid);
         // All Connection events (20..=28) should share the same color
         let color_20 = lut.colors[20];
-        for et in 21..=28u8 {
-            assert_eq!(lut.colors[et as usize], color_20,
+        for et in 21..=28usize {
+            assert_eq!(lut.colors[et], color_20,
                 "Connection event {} should match event 20", et);
         }
     }
@@ -721,12 +721,12 @@ mod tests {
     fn build_color_lut_single_category_distinct_colors() {
         // Enable only Connection events (20..=28)
         let mut sel = none_selected();
-        for et in 20..=28u8 {
-            sel[et as usize] = true;
+        for et in 20..=28usize {
+            sel[et] = true;
         }
         let lut = build_color_lut(&sel, ColorSchema::Vivid);
         // Each Connection event should have a distinct color
-        let colors: Vec<[f32; 4]> = (20..=28u8).map(|et| lut.colors[et as usize]).collect();
+        let colors: Vec<[f32; 4]> = (20..=28usize).map(|et| lut.colors[et]).collect();
         for i in 0..colors.len() {
             assert_ne!(colors[i], [0.0; 4], "Event {} should have non-zero color", 20 + i);
             for j in (i + 1)..colors.len() {
@@ -739,8 +739,8 @@ mod tests {
     #[test]
     fn build_color_lut_single_category_unselected_are_zero() {
         let mut sel = none_selected();
-        for et in 20..=28u8 {
-            sel[et as usize] = true;
+        for et in 20..=28usize {
+            sel[et] = true;
         }
         let lut = build_color_lut(&sel, ColorSchema::Vivid);
         // Status event 10 should be zero (not in selected category)
@@ -758,7 +758,7 @@ mod tests {
         for (cat_idx, category) in EVENT_CATEGORIES.iter().enumerate() {
             let expected = vivid[cat_idx];
             for &et in category.event_types {
-                assert_eq!(lut.colors[et as usize], expected);
+                assert_eq!(lut.colors[et.idx()], expected);
             }
         }
     }
@@ -768,9 +768,10 @@ mod tests {
         let sel = all_selected();
         let vivid_lut = build_color_lut(&sel, ColorSchema::Vivid);
         let accessible_lut = build_color_lut(&sel, ColorSchema::Accessible);
-        // Work Package event 90 should have different colors in different schemas
-        assert_ne!(vivid_lut.colors[90], accessible_lut.colors[90],
-            "Different schemas should produce different colors for event 90");
+        // Work Package event should have different colors in different schemas
+        let wp = EventType::WorkPackageSubmission.idx();
+        assert_ne!(vivid_lut.colors[wp], accessible_lut.colors[wp],
+            "Different schemas should produce different colors for WorkPackageSubmission");
     }
 
     #[test]
