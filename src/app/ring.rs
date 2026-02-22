@@ -24,18 +24,29 @@ impl JamApp {
 
         let now = now_seconds() as f32;
 
-        let (particle_max, active_count, num_nodes, new_particles, new_cursor) =
+        let (particle_max, active_count, num_nodes, new_particles, new_cursor, peer_counts) =
             with_data!(self, |data| {
                 let (particles, cursor, skip) =
                     data.directed_buffer.get_new_since(self.gpu_upload_cursor);
                 let gpu_particles: Vec<GpuParticle> =
                     particles.iter().skip(skip).map(GpuParticle::from).collect();
+                let nc = data.events.node_count().max(1);
+                let mut counts = vec![0.0f32; nc];
+                for (node_id, node) in data.events.nodes() {
+                    let idx = node.index as usize;
+                    if idx < nc {
+                        if let Some(c) = data.time_series.latest_value(node_id) {
+                            counts[idx] = c;
+                        }
+                    }
+                }
                 (
                     data.directed_buffer.capacity(),
                     data.directed_buffer.active_count(now, 5.0),
-                    data.events.node_count().max(1),
+                    nc,
                     gpu_particles,
                     cursor,
+                    counts,
                 )
             });
         self.gpu_upload_cursor = new_cursor;
@@ -63,13 +74,17 @@ impl JamApp {
             egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(100, 100, 100, 40)),
         );
         let num_dots = num_nodes.min(256);
+        let max_peers = peer_counts.iter().cloned().fold(1.0f32, f32::max);
         for i in 0..num_dots {
             let angle = (i as f32 / num_dots as f32) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * pixel_radius;
+            let brightness = (peer_counts[i] / max_peers).clamp(0.1, 1.0);
+            let gray = (80.0 + brightness * 120.0) as u8;
+            let alpha = (60.0 + brightness * 180.0) as u8;
             painter.circle_filled(
                 pos,
                 4.0,
-                egui::Color32::from_rgba_unmultiplied(150, 150, 150, 100),
+                egui::Color32::from_rgba_unmultiplied(gray, gray, gray, alpha),
             );
         }
 
@@ -108,13 +123,24 @@ impl JamApp {
         let now = now_seconds() as f32;
         let max_age = 5.0_f32;
 
-        let (particle_max, num_nodes, active_particles) =
+        let (particle_max, num_nodes, active_particles, peer_counts) =
             with_data!(self, |data| {
                 let particles = data.directed_buffer.get_active_particles(now, max_age);
+                let nc = data.events.node_count().max(1);
+                let mut counts = vec![0.0f32; nc];
+                for (node_id, node) in data.events.nodes() {
+                    let idx = node.index as usize;
+                    if idx < nc {
+                        if let Some(c) = data.time_series.latest_value(node_id) {
+                            counts[idx] = c;
+                        }
+                    }
+                }
                 (
                     data.directed_buffer.capacity(),
-                    data.events.node_count().max(1),
+                    nc,
                     particles,
+                    counts,
                 )
             });
 
@@ -138,15 +164,19 @@ impl JamApp {
             egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(100, 100, 100, 40)),
         );
 
-        // Draw node dots
+        // Draw node dots (brightness by peer count)
         let num_dots = num_nodes.min(256);
+        let max_peers = peer_counts.iter().cloned().fold(1.0f32, f32::max);
         for i in 0..num_dots {
             let angle = (i as f32 / num_dots as f32) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
+            let brightness = (peer_counts[i] / max_peers).clamp(0.1, 1.0);
+            let gray = (80.0 + brightness * 120.0) as u8;
+            let alpha = (60.0 + brightness * 180.0) as u8;
             painter.circle_filled(
                 pos,
                 4.0,
-                egui::Color32::from_rgba_unmultiplied(150, 150, 150, 100),
+                egui::Color32::from_rgba_unmultiplied(gray, gray, gray, alpha),
             );
         }
 

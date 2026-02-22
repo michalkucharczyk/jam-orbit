@@ -72,6 +72,13 @@ impl TimeSeriesData {
     pub fn point_count(&self) -> usize {
         self.series.first().map_or(0, |s| s.len())
     }
+
+    /// Get the latest value (peer count) for a node_id
+    pub fn latest_value(&self, node_id: &str) -> Option<f32> {
+        self.node_index.get(node_id)
+            .and_then(|&idx| self.series.get(idx))
+            .and_then(|s| s.last().copied())
+    }
 }
 
 /// Best block and finalized block data per validator
