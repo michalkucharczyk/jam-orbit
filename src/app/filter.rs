@@ -71,45 +71,53 @@ impl JamApp {
             .resizable(true)
             .frame(egui::Frame::new().fill(colors::BG_PRIMARY).inner_margin(8.0))
             .show(ctx, |ui| {
-                // Global buttons
-                ui.horizontal(|ui| {
-                    if ui.button(egui::RichText::new("All")).clicked() {
-                        self.apply_all_filter();
-                    }
-                    if ui.button(egui::RichText::new("None")).clicked() {
-                        self.selected_events.fill(false);
-                        self.errors_only = false;
-                    }
-                    if ui.button(egui::RichText::new("Errors")).clicked() {
-                        self.apply_errors_filter();
-                    }
+                let group_frame = egui::Frame::new()
+                    .stroke(egui::Stroke::new(1.0, colors::TEXT_MUTED.gamma_multiply(0.6)))
+                    .corner_radius(4.0)
+                    .inner_margin(6.0);
+
+                // ── Select group ──
+                group_frame.show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.label(egui::RichText::new("Select:").color(colors::TEXT_MUTED));
+                    ui.horizontal(|ui| {
+                        if ui.button("All").clicked() {
+                            self.apply_all_filter();
+                        }
+                        if ui.button("None").clicked() {
+                            self.selected_events.fill(false);
+                            self.errors_only = false;
+                        }
+                        if ui.button("Errors").clicked() {
+                            self.apply_errors_filter();
+                        }
+                    });
                 });
 
                 ui.add_space(4.0);
-                ui.separator();
-                ui.add_space(4.0);
 
-                // ── Narrowing buttons ──
-                ui.label(egui::RichText::new("Narrow:").color(colors::TEXT_MUTED));
-                ui.add_space(2.0);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Outbound").clicked() {
-                        narrow_keep_only(&mut self.selected_events, OUTBOUND_EVENTS);
-                    }
-                    if ui.button("Inbound").clicked() {
-                        narrow_keep_only(&mut self.selected_events, INBOUND_EVENTS);
-                    }
-                    if ui.button("Bidir").clicked() {
-                        narrow_keep_only(&mut self.selected_events, BIDIR_EVENTS);
-                    }
-                    if ui.button("Local").clicked() {
-                        narrow_remove(&mut self.selected_events, OUTBOUND_EVENTS);
-                        narrow_remove(&mut self.selected_events, INBOUND_EVENTS);
-                        narrow_remove(&mut self.selected_events, BIDIR_EVENTS);
-                    }
-                    if ui.button("No Errors").clicked() {
-                        narrow_remove(&mut self.selected_events, ERROR_EVENT_TYPES);
-                    }
+                // ── Narrow group ──
+                group_frame.show(ui, |ui| {
+                    ui.label(egui::RichText::new("Narrow:").color(colors::TEXT_MUTED));
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Outbound").clicked() {
+                            narrow_keep_only(&mut self.selected_events, OUTBOUND_EVENTS);
+                        }
+                        if ui.button("Inbound").clicked() {
+                            narrow_keep_only(&mut self.selected_events, INBOUND_EVENTS);
+                        }
+                        if ui.button("Bidir").clicked() {
+                            narrow_keep_only(&mut self.selected_events, BIDIR_EVENTS);
+                        }
+                        if ui.button("Local").clicked() {
+                            narrow_remove(&mut self.selected_events, OUTBOUND_EVENTS);
+                            narrow_remove(&mut self.selected_events, INBOUND_EVENTS);
+                            narrow_remove(&mut self.selected_events, BIDIR_EVENTS);
+                        }
+                        if ui.button("No Errors").clicked() {
+                            narrow_remove(&mut self.selected_events, ERROR_EVENT_TYPES);
+                        }
+                    });
                 });
 
                 ui.add_space(4.0);
