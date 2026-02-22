@@ -277,6 +277,8 @@ impl JamApp {
             current_time: now as f32,
             max_age: max_age as f32,
             aspect_ratio,
+            speed_factor: self.speed_factor,
+            _pad: [0.0; 3],
         };
 
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(

@@ -20,6 +20,10 @@ struct Uniforms {
     num_validators: f32,
     aspect_ratio: f32,
     point_size: f32,       // line half-width in NDC
+    speed_factor: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 }
 
 @group(0) @binding(0)
@@ -129,8 +133,9 @@ fn vs_main(
             return out;
         }
 
-        let t = clamp(age / travel_duration, 0.0, 1.0);
-        if age > travel_duration * 1.5 || age < 0.0 {
+        let radial_dur = travel_duration / uniforms.speed_factor;
+        let t = clamp(age / radial_dur, 0.0, 1.0);
+        if age > radial_dur * 1.5 || age < 0.0 {
             out.clip_position = vec4(2.0, 2.0, 0.0, 1.0);
             out.color = vec4(0.0);
             return out;
@@ -158,8 +163,8 @@ fn vs_main(
 
     // ── Directed events: rendered as bezier trail lines (all 16 segments) ──
 
-    // Effective duration with 4x speed
-    let eff_dur = travel_duration / DIRECTED_SPEED;
+    // Effective duration with speed multiplier
+    let eff_dur = travel_duration / (DIRECTED_SPEED * uniforms.speed_factor);
 
     // Animation: head 0→1 in eff_dur, then tail 0→1 in eff_dur
     let t_head = clamp(age / eff_dur, 0.0, 1.0);

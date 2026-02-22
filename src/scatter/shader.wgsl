@@ -11,6 +11,10 @@ struct Uniforms {
     current_time: f32,
     max_age: f32,
     aspect_ratio: f32,
+    speed_factor: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 }
 
 @group(0) @binding(0)
@@ -54,7 +58,8 @@ fn vs_main(
     let quad_offset = QUAD_POS[vertex_index % 6u];
     out.quad_uv = quad_offset;
 
-    let age = uniforms.current_time - birth_time;
+    let raw_age = uniforms.current_time - birth_time;
+    let age = raw_age * uniforms.speed_factor;
 
     // Discard old or future particles
     if age > uniforms.max_age || age < 0.0 {

@@ -32,6 +32,8 @@ pub struct ScatterUniforms {
     pub current_time: f32,
     pub max_age: f32,
     pub aspect_ratio: f32,
+    pub speed_factor: f32,
+    pub _pad: [f32; 3],
 }
 
 /// GPU scatter renderer with off-screen texture
@@ -164,6 +166,8 @@ impl ScatterRenderer {
             current_time: 0.0,
             max_age: 10.0,
             aspect_ratio: 1.0,
+            speed_factor: 1.0,
+            _pad: [0.0; 3],
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

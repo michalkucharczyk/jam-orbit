@@ -6,6 +6,7 @@ mod header;
 mod filter;
 mod ring;
 mod graphs;
+mod settings;
 
 use eframe::egui;
 use tracing::info;
@@ -128,6 +129,14 @@ pub struct JamApp {
     pub(crate) color_schema: ColorSchema,
     /// Dynamic color lookup table (recomputed on filter/schema change)
     pub(crate) color_lut: ColorLut,
+    /// Show settings sidebar
+    pub(crate) show_settings: bool,
+    /// Slot pulse animation enabled
+    pub(crate) slot_pulse_enabled: bool,
+    /// Node brightness by peer count enabled
+    pub(crate) node_brightness_enabled: bool,
+    /// Particle speed factor (0.1 = 10x slow, 1.0 = normal, 2.0 = 2x fast)
+    pub(crate) speed_factor: f32,
     /// Buffered WebSocket messages for time-budgeted processing (WASM only)
     #[cfg(target_arch = "wasm32")]
     msg_buffer: Rc<RefCell<VecDeque<String>>>,
@@ -250,6 +259,10 @@ impl JamApp {
             particle_max: 0,
             color_schema: ColorSchema::default(),
             color_lut: build_color_lut(&Self::default_selected_events(), ColorSchema::default()),
+            show_settings: false,
+            slot_pulse_enabled: true,
+            node_brightness_enabled: true,
+            speed_factor: 1.0,
             msg_buffer,
         }
     }
@@ -339,6 +352,10 @@ impl JamApp {
             particle_max: 0,
             color_schema: ColorSchema::default(),
             color_lut: build_color_lut(&Self::default_selected_events(), ColorSchema::default()),
+            show_settings: false,
+            slot_pulse_enabled: true,
+            node_brightness_enabled: true,
+            speed_factor: 1.0,
         }
     }
 
@@ -658,7 +675,12 @@ impl eframe::App for JamApp {
             self.render_event_selector(ctx);
         }
 
-        // Legend window (collapsible, anchored bottom-left, hidden when sidebar open)
+        // Settings sidebar (left, must be shown before CentralPanel)
+        if self.show_settings {
+            self.render_settings(ctx);
+        }
+
+        // Legend window (collapsible, anchored bottom-left, hidden when filter sidebar open)
         if !self.show_event_selector {
             self.draw_legend(ctx);
         }

@@ -47,6 +47,8 @@ pub struct Uniforms {
     pub num_validators: f32,
     pub aspect_ratio: f32,
     pub point_size: f32,
+    pub speed_factor: f32,
+    pub _pad: [f32; 3],
 }
 
 impl Default for Uniforms {
@@ -56,6 +58,8 @@ impl Default for Uniforms {
             num_validators: 1024.0,
             aspect_ratio: 1.0,
             point_size: 0.005,
+            speed_factor: 1.0,
+            _pad: [0.0; 3],
         }
     }
 }

@@ -78,21 +78,24 @@ impl JamApp {
         for i in 0..num_dots {
             let angle = (i as f32 / num_dots as f32) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * pixel_radius;
-            let brightness = (peer_counts[i] / max_peers).clamp(0.1, 1.0);
-            let gray = (80.0 + brightness * 120.0) as u8;
-            let alpha = (60.0 + brightness * 180.0) as u8;
-            painter.circle_filled(
-                pos,
-                4.0,
-                egui::Color32::from_rgba_unmultiplied(gray, gray, gray, alpha),
-            );
+            let color = if self.node_brightness_enabled {
+                let brightness = (peer_counts[i] / max_peers).clamp(0.1, 1.0);
+                let gray = (80.0 + brightness * 120.0) as u8;
+                let alpha = (60.0 + brightness * 180.0) as u8;
+                egui::Color32::from_rgba_unmultiplied(gray, gray, gray, alpha)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(150, 150, 150, 100)
+            };
+            painter.circle_filled(pos, 4.0, color);
         }
 
         // Draw collapsing pulse overlays
         self.draw_pulses(&painter, center, pixel_radius, num_nodes_f, now);
 
         // Draw slot pulse
-        Self::draw_slot_pulse(&painter, center, pixel_radius);
+        if self.slot_pulse_enabled {
+            Self::draw_slot_pulse(&painter, center, pixel_radius);
+        }
 
         // GPU paint callback for particles
         let filter = FilterBitfield::from_u64_bitfield(&self.build_filter_bitfield());
@@ -102,6 +105,8 @@ impl JamApp {
             num_validators: num_nodes as f32,
             aspect_ratio,
             point_size: 0.005,
+            speed_factor: self.speed_factor,
+            _pad: [0.0; 3],
         };
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
@@ -170,14 +175,15 @@ impl JamApp {
         for i in 0..num_dots {
             let angle = (i as f32 / num_dots as f32) * 2.0 * PI - PI * 0.5;
             let pos = center + egui::vec2(angle.cos(), angle.sin()) * radius;
-            let brightness = (peer_counts[i] / max_peers).clamp(0.1, 1.0);
-            let gray = (80.0 + brightness * 120.0) as u8;
-            let alpha = (60.0 + brightness * 180.0) as u8;
-            painter.circle_filled(
-                pos,
-                4.0,
-                egui::Color32::from_rgba_unmultiplied(gray, gray, gray, alpha),
-            );
+            let color = if self.node_brightness_enabled {
+                let brightness = (peer_counts[i] / max_peers).clamp(0.1, 1.0);
+                let gray = (80.0 + brightness * 120.0) as u8;
+                let alpha = (60.0 + brightness * 180.0) as u8;
+                egui::Color32::from_rgba_unmultiplied(gray, gray, gray, alpha)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(150, 150, 150, 100)
+            };
+            painter.circle_filled(pos, 4.0, color);
         }
 
         // Draw active particles (CPU path)
@@ -192,9 +198,10 @@ impl JamApp {
             );
 
             if particle.source_index == particle.target_index {
-                // ── Radial: circle particle (unchanged) ──
-                let t = (age / particle.travel_duration).clamp(0.0, 1.0);
-                if age > particle.travel_duration * 1.5 || age < 0.0 {
+                // ── Radial: circle particle ──
+                let radial_dur = particle.travel_duration / self.speed_factor;
+                let t = (age / radial_dur).clamp(0.0, 1.0);
+                if age > radial_dur * 1.5 || age < 0.0 {
                     continue;
                 }
                 let angle = (particle.source_index / num_nodes_f) * 2.0 * PI - PI * 0.5;
@@ -210,8 +217,8 @@ impl JamApp {
                 );
                 painter.circle_filled(pos, 3.0, final_color);
             } else {
-                // ── Directed: bezier trail line (4x speed) ──
-                let eff_dur = particle.travel_duration / DIRECTED_SPEED;
+                // ── Directed: bezier trail line ──
+                let eff_dur = particle.travel_duration / (DIRECTED_SPEED * self.speed_factor);
                 let t_head = (age / eff_dur).clamp(0.0, 1.0);
                 let t_tail = ((age - eff_dur) / eff_dur).clamp(0.0, 1.0);
                 if age > eff_dur * 2.5 || age < 0.0 || t_head <= t_tail {
@@ -270,7 +277,9 @@ impl JamApp {
         self.draw_pulses(&painter, center, radius, num_nodes_f, now);
 
         // Draw slot pulse
-        Self::draw_slot_pulse(&painter, center, radius);
+        if self.slot_pulse_enabled {
+            Self::draw_slot_pulse(&painter, center, radius);
+        }
 
     }
 

@@ -3,7 +3,6 @@
 use eframe::egui;
 use crate::theme::colors;
 use crate::time::now_seconds;
-use crate::vring::ColorSchema;
 use super::{JamApp, ActiveTab, with_data};
 
 impl JamApp {
@@ -21,10 +20,26 @@ impl JamApp {
         });
 
         ui.horizontal(|ui| {
-            // LEFT: Control buttons — Filter first
+            // LEFT: Control buttons — Filter, Settings, then tabs
             let filter_text = if self.show_event_selector { "Filter <" } else { "Filter >" };
             if ui.button(egui::RichText::new(filter_text)).clicked() {
                 self.show_event_selector = !self.show_event_selector;
+            }
+
+            // Settings toggle
+            let settings_color = if self.show_settings {
+                colors::TEXT_PRIMARY
+            } else {
+                colors::TEXT_MUTED
+            };
+            if ui
+                .selectable_label(
+                    self.show_settings,
+                    egui::RichText::new("Settings").color(settings_color),
+                )
+                .clicked()
+            {
+                self.show_settings = !self.show_settings;
             }
 
             ui.add_space(10.0);
@@ -52,18 +67,6 @@ impl JamApp {
                     self.active_tab = tab;
                 }
             }
-
-            ui.add_space(10.0);
-
-            // Color schema selector
-            egui::ComboBox::from_id_salt("color_schema")
-                .selected_text(egui::RichText::new(self.color_schema.label()).color(colors::TEXT_MUTED))
-                .width(90.0)
-                .show_ui(ui, |ui| {
-                    for &schema in ColorSchema::ALL {
-                        ui.selectable_value(&mut self.color_schema, schema, schema.label());
-                    }
-                });
 
             // RIGHT: Status and stats (right-to-left order)
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
