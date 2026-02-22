@@ -76,11 +76,11 @@ impl JamApp {
                     .corner_radius(4.0)
                     .inner_margin(8.0)
                     .show(ui, |ui| {
-                        ui.set_min_width(360.0);
                         let header = egui::CollapsingHeader::new(title)
                             .default_open(true);
 
                         header.show(ui, |ui| {
+                            ui.set_min_width(ctx.screen_rect().width() * 0.2);
                             ui.label(
                                 egui::RichText::new(format!("{:.0} fps", self.fps_counter.fps()))
                                     .color(colors::TEXT_SECONDARY),
